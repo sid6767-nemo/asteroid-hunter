@@ -58,7 +58,27 @@ def nearest(point, candidates):
     idx = np.argmin(dists)
     return idx, dists[idx]
 
+def local_brightness(image, x, y, box=10):
+    """Max pixel value in a box around (x,y) — high means near a bright/saturated star."""
+    h, w = image.shape
+    x0, x1 = max(0, int(x)-box), min(w, int(x)+box)
+    y0, y1 = max(0, int(y)-box), min(h, int(y)+box)
+    region = image[y0:y1, x0:x1]
+    if region.size == 0:
+        return 0
+    return np.max(region)
 
+def reject_near_saturation(candidates, img1, img2):
+    """Remove candidates sitting near saturated/bright regions."""
+    sat_level = np.percentile(img1[img1 > 0], 99.5)
+    kept = []
+    for c in candidates:
+        x, y = c['pos']
+        b1 = local_brightness(img1, x, y)
+        b2 = local_brightness(img2, x, y)
+        if b1 <= sat_level and b2 <= sat_level:
+            kept.append(c)
+    return kept, sat_level    
 def find_candidates(pos_xy, neg_xy):
     """Mutual-nearest-neighbour matching within motion window."""
     confirmed = []
@@ -95,6 +115,10 @@ def main():
 
     print("Finding candidates...")
     candidates = find_candidates(pos_xy, neg_xy)
+    print("Filtering candidates near saturation...")
+    before = len(candidates)
+    candidates, sat_level = reject_near_saturation(candidates, img1, aligned2)
+    print(f"  Saturation cutoff: {sat_level:.0f} | {before} -> {len(candidates)} after filter")
     print(f"\n{len(candidates)} candidate moving object(s):")
     for n, c in enumerate(candidates):
         print(f"  #{n+1}: moved {c['dist']:.1f} px, "
