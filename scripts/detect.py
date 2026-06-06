@@ -68,6 +68,16 @@ def local_brightness(image, x, y, box=10):
         return 0
     return np.max(region)
 
+def fraction_masked(image, x, y, box=5):
+    """Fraction of pixels that are exactly 0 (masked/no-data) in a box around (x,y)."""
+    h, w = image.shape
+    x0, x1 = max(0, int(x)-box), min(w, int(x)+box)
+    y0, y1 = max(0, int(y)-box), min(h, int(y)+box)
+    region = image[y0:y1, x0:x1]
+    if region.size == 0:
+        return 1.0
+    return np.mean(region == 0)
+
 def reject_near_saturation(candidates, img1, img2):
     """Remove candidates sitting near saturated/bright regions."""
     sat_level = np.percentile(img1[img1 > 0], 99.5)
@@ -78,7 +88,18 @@ def reject_near_saturation(candidates, img1, img2):
         b2 = local_brightness(img2, x, y)
         if b1 <= sat_level and b2 <= sat_level:
             kept.append(c)
-    return kept, sat_level    
+    return kept, sat_level
+
+def reject_masked(candidates, img1, img2, mask_limit=0.5):
+    """Remove candidates whose before/after positions fall on masked (no-data) regions."""
+    kept = []
+    for c in candidates:
+        m_pos = fraction_masked(img2, c['pos'][0], c['pos'][1])
+        m_neg = fraction_masked(img1, c['neg'][0], c['neg'][1])
+        if m_pos <= mask_limit and m_neg <= mask_limit:
+            kept.append(c)
+    return kept 
+
 def find_candidates(pos_xy, neg_xy):
     """Mutual-nearest-neighbour matching within motion window."""
     confirmed = []
@@ -119,6 +140,10 @@ def main():
     before = len(candidates)
     candidates, sat_level = reject_near_saturation(candidates, img1, aligned2)
     print(f"  Saturation cutoff: {sat_level:.0f} | {before} -> {len(candidates)} after filter")
+    print("Filtering candidates on masked regions...")
+    before = len(candidates)
+    candidates = reject_masked(candidates, img1, aligned2)
+    print(f"  {before} -> {len(candidates)} after mask filter")
     print(f"\n{len(candidates)} candidate moving object(s):")
     for n, c in enumerate(candidates):
         print(f"  #{n+1}: moved {c['dist']:.1f} px, "
