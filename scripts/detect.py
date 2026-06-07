@@ -48,7 +48,7 @@ def detect_sources(image):
     sources = finder(image - median)
     if sources is None:
         return np.empty((0, 2))
-    return np.array([sources['xcentroid'], sources['ycentroid']]).T
+    return np.array([sources['x_centroid'], sources['y_centroid']]).T
 
 
 def nearest(point, candidates):
