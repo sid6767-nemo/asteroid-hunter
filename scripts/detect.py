@@ -112,6 +112,16 @@ def find_candidates(pos_xy, neg_xy):
             confirmed.append({'pos': p, 'neg': neg_xy[j], 'dist': d_pn})
     return confirmed
 
+def classify(rate):
+    """First-pass classification by apparent sky motion (arcsec/day). Approximate."""
+    if rate < 1:
+        return "too slow -> proper-motion star or artifact, NOT a solar-system object"
+    elif rate < 50:
+        return "slow -> distant-object / TNO-like range"
+    elif rate < 500:
+        return "main-belt asteroid range"
+    else:
+        return "fast -> NEO-like"
 
 def main():
     if len(sys.argv) != 3:
@@ -144,11 +154,18 @@ def main():
     before = len(candidates)
     candidates = reject_masked(candidates, img1, aligned2)
     print(f"  {before} -> {len(candidates)} after mask filter")
+    # --- Day 15: convert pixel motion to real sky motion and classify ---
+    pixel_scale = abs(hdr1['CDELT1']) * 3600          # deg/px -> arcsec/px
+    gap_days = abs(hdr2['MJD-OBS'] - hdr1['MJD-OBS'])
+    print(f"\nPixel scale: {pixel_scale:.3f} arcsec/px | Time gap: {gap_days:.2f} days")
+
     print(f"\n{len(candidates)} candidate moving object(s):")
     for n, c in enumerate(candidates):
-        print(f"  #{n+1}: moved {c['dist']:.1f} px, "
+        rate = c['dist'] * pixel_scale / gap_days
+        print(f"  #{n+1}: moved {c['dist']:.1f} px = {rate:.4f} arcsec/day  "
               f"({c['neg'][0]:.0f},{c['neg'][1]:.0f}) -> "
               f"({c['pos'][0]:.0f},{c['pos'][1]:.0f})")
+        print(f"       -> {classify(rate)}")
 
     # Visualize
     fig, ax = plt.subplots(figsize=(10, 10))
