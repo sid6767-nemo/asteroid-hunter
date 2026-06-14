@@ -24,8 +24,26 @@ def classify(rate):
         return "main-belt asteroid range"
     else:
         return "fast → NEO-like"
-    
+
+def flag_for_review(rate):
+    """Worth a human's attention if it moves at solar-system speeds.
+    Near-stationary things (likely stars/artifacts) are kept but marked
+    low-priority, not thrown away."""
+    return rate >= 1.0
+   
+flagged = 0
 for name, pixels in candidates.items():
     arcsec_moved = pixels * PIXEL_SCALE
     rate = arcsec_moved / gap_days
-    print(f"{name}: {rate:.4f} arcsec/day  →  {classify(rate)}")
+    if flag_for_review(rate):
+        tag = "** FLAG FOR REVIEW **"
+        flagged += 1
+    else:
+        tag = "(low priority - likely star/artifact, kept anyway)"
+    print(f"{name}: {rate:.4f} arcsec/day  ->  {classify(rate)}  {tag}")
+
+print(f"\n{flagged} of {len(candidates)} candidate(s) flagged for review.")
+
+print("\n--- flag logic check on sample rates ---")
+for test_rate in [0.02, 5, 120, 800]:
+    print(f"{test_rate} arcsec/day -> flagged? {flag_for_review(test_rate)}  ({classify(test_rate)})")

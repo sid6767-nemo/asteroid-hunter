@@ -123,6 +123,12 @@ def classify(rate):
     else:
         return "fast -> NEO-like"
 
+def flag_for_review(rate):
+    """Worth a human's attention if it moves at solar-system speeds.
+    Near-stationary things (likely stars/artifacts) are kept but marked
+    low-priority, not thrown away."""
+    return rate >= 1.0    
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: python scripts/detect.py <image1.fits> <image2.fits>")
@@ -160,12 +166,20 @@ def main():
     print(f"\nPixel scale: {pixel_scale:.3f} arcsec/px | Time gap: {gap_days:.2f} days")
 
     print(f"\n{len(candidates)} candidate moving object(s):")
+    flagged = 0
     for n, c in enumerate(candidates):
         rate = c['dist'] * pixel_scale / gap_days
+        if flag_for_review(rate):
+            tag = "** FLAG FOR REVIEW **"
+            flagged += 1
+        else:
+            tag = "(low priority - likely star/artifact)"
         print(f"  #{n+1}: moved {c['dist']:.1f} px = {rate:.4f} arcsec/day  "
               f"({c['neg'][0]:.0f},{c['neg'][1]:.0f}) -> "
               f"({c['pos'][0]:.0f},{c['pos'][1]:.0f})")
-        print(f"       -> {classify(rate)}")
+        print(f"       -> {classify(rate)}  {tag}")
+
+    print(f"\n{flagged} of {len(candidates)} candidate(s) flagged for review.")
 
     # Visualize
     fig, ax = plt.subplots(figsize=(10, 10))
