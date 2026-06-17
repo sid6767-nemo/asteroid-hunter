@@ -84,3 +84,43 @@ for n, c in enumerate(candidates):
     rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
     print(f"  #{n+1}: {c['dist']:.1f} px = {rate:.0f} arcsec/day  "
           f"({c['pos1'][0]:.0f},{c['pos1'][1]:.0f}) -> ({c['pos2'][0]:.0f},{c['pos2'][1]:.0f})")
+    # --- line check: confirm candidates in frames 3 and 4 ---
+CONFIRM_RADIUS = 5  # px - how close the source needs to be to predicted position
+
+pos3 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[2]])
+pos4 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[3]])
+
+tree3 = KDTree(pos3)
+tree4 = KDTree(pos4)
+
+print("\nRunning line-check on candidates...")
+confirmed = []
+for n, c in enumerate(candidates):
+    A = c['pos1']
+    B = c['pos2']
+    step = B - A
+
+    # predict positions in frames 3 and 4
+    pred3 = B + step
+    pred4 = B + 2 * step
+
+    # check if a source exists near predicted position
+    dist3, _ = tree3.query(pred3)
+    dist4, _ = tree4.query(pred4)
+
+    hits = 0
+    if dist3 < CONFIRM_RADIUS:
+        hits += 1
+    if dist4 < CONFIRM_RADIUS:
+        hits += 1
+
+    if hits >= 1:  # at least 3 out of 4 frames
+        rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
+        confirmed.append({**c, 'pred3': pred3, 'pred4': pred4,
+                         'dist3': dist3, 'dist4': dist4, 'hits': hits})
+        print(f"  CONFIRMED #{len(confirmed)}: {c['dist']:.1f} px = {rate:.0f} arcsec/day "
+              f"({A[0]:.0f},{A[1]:.0f})->({B[0]:.0f},{B[1]:.0f}) "
+              f"| frame3: {dist3:.1f}px off | frame4: {dist4:.1f}px off "
+              f"| {hits+2}/4 frames")
+
+print(f"\n{len(confirmed)} candidate(s) survived line-check out of {len(candidates)}")
