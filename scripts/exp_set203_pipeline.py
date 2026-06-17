@@ -123,4 +123,24 @@ for n, c in enumerate(candidates):
               f"| frame3: {dist3:.1f}px off | frame4: {dist4:.1f}px off "
               f"| {hits+2}/4 frames")
 
+def classify(rate):
+    if rate < 1:
+        return "too slow -> likely star or artifact"
+    elif rate < 50:
+        return "slow -> TNO-like"
+    elif rate < 500:
+        return "main-belt asteroid range"
+    else:
+        return "fast -> NEO-like"
+
 print(f"\n{len(confirmed)} candidate(s) survived line-check out of {len(candidates)}")
+print("\n=== FINAL CONFIRMED CANDIDATES ===")
+for n, c in enumerate(confirmed):
+    rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
+    A, B = c['pos1'], c['pos2']
+    print(f"\nCandidate #{n+1}")
+    print(f"  Speed:     {rate:.0f} arcsec/day  ->  {classify(rate)}")
+    print(f"  Track:     ({A[0]:.0f},{A[1]:.0f}) -> ({B[0]:.0f},{B[1]:.0f})")
+    print(f"  Frame 3:   {c['dist3']:.1f}px from predicted position")
+    print(f"  Frame 4:   {c['dist4']:.1f}px from predicted position")
+    print(f"  Confirmed: {c['hits']+2}/4 frames")
