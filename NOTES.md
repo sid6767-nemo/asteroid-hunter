@@ -43,3 +43,12 @@ enough to maybe be a real solar-system object, and keeps the slow
 ones as low-priority instead of deleting them. On my data all 3 were
 too slow, so 0 of 3 got flagged, which is the correct result since
 there were no real moving objects in this field.
+
+## Day 17: 4-image line-check
+
+Switched to a practice dataset containing four FITS images taken 21 minutes apart,
+rather than two. The pipeline found 96 candidates between the first two frames. To
+filter those down, I predicted where each candidate should appear in frames 3 and 4
+based on its speed and direction. Anything that didn't show up near the predicted
+position in at least 2 frames was rejected. 3 candidates survived (739 arcsec/day
+NEO-like, 153 arcsec/day main-belt, 70 arcsec/day main-belt).
