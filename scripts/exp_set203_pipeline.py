@@ -6,6 +6,7 @@ import astroalign as aa
 from astropy.stats import sigma_clipped_stats
 from photutils.detection import DAOStarFinder
 from scipy.spatial import KDTree
+import matplotlib.pyplot as plt
 
 PIXEL_SCALE = 0.256  # arcsec/px
 
@@ -23,7 +24,6 @@ for f in files:
         mjds.append(mjd)
         print(f"  {f.split('/')[-1][:20]}...  MJD={mjd:.6f}")
 
-# time gaps in minutes
 gaps = [(mjds[i+1] - mjds[i]) * 24 * 60 for i in range(3)]
 print(f"\nTime gaps: {gaps[0]:.1f} min, {gaps[1]:.1f} min, {gaps[2]:.1f} min")
 
@@ -60,11 +60,9 @@ for i, img in enumerate(aligned):
         print(f"  Frame {i+1}: {len(sources)} sources")
     all_sources.append(sources)
 
-print("\nColumn names:", all_sources[0].colnames)
-
 # --- find candidates between frame 1 and frame 2 ---
-MIN_MOVE = 3    # px
-MAX_MOVE = 100  # px
+MIN_MOVE = 3
+MAX_MOVE = 100
 
 print("\nFinding candidates (frame 1 -> frame 2)...")
 
@@ -80,12 +78,9 @@ for i, (dist, j) in enumerate(zip(dists, idxs)):
         candidates.append({'pos1': pos1[i], 'pos2': pos2[j], 'dist': dist})
 
 print(f"  {len(candidates)} candidate(s) between frame 1 and 2")
-for n, c in enumerate(candidates):
-    rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
-    print(f"  #{n+1}: {c['dist']:.1f} px = {rate:.0f} arcsec/day  "
-          f"({c['pos1'][0]:.0f},{c['pos1'][1]:.0f}) -> ({c['pos2'][0]:.0f},{c['pos2'][1]:.0f})")
-    # --- line check: confirm candidates in frames 3 and 4 ---
-CONFIRM_RADIUS = 5  # px - how close the source needs to be to predicted position
+
+# --- line check ---
+CONFIRM_RADIUS = 5
 
 pos3 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[2]])
 pos4 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[3]])
@@ -99,22 +94,16 @@ for n, c in enumerate(candidates):
     A = c['pos1']
     B = c['pos2']
     step = B - A
-
-    # predict positions in frames 3 and 4
     pred3 = B + step
     pred4 = B + 2 * step
-
-    # check if a source exists near predicted position
     dist3, _ = tree3.query(pred3)
     dist4, _ = tree4.query(pred4)
-
     hits = 0
     if dist3 < CONFIRM_RADIUS:
         hits += 1
     if dist4 < CONFIRM_RADIUS:
         hits += 1
-
-    if hits >= 1:  # at least 3 out of 4 frames
+    if hits >= 1:
         rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
         confirmed.append({**c, 'pred3': pred3, 'pred4': pred4,
                          'dist3': dist3, 'dist4': dist4, 'hits': hits})
@@ -144,30 +133,21 @@ for n, c in enumerate(confirmed):
     print(f"  Frame 3:   {c['dist3']:.1f}px from predicted position")
     print(f"  Frame 4:   {c['dist4']:.1f}px from predicted position")
     print(f"  Confirmed: {c['hits']+2}/4 frames")
-# --- visualize confirmed candidates across all 4 frames ---
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
+# --- visualize all 4 frames with confirmed candidates ---
 print("\nGenerating visualization...")
-
 fig, axes = plt.subplots(1, 4, figsize=(20, 6))
 fig.suptitle(f'Confirmed moving objects: {len(confirmed)}', fontsize=14)
 
+colors = ['cyan', 'orange', 'red']
 for frame_idx, (ax, img) in enumerate(zip(axes, aligned)):
-    # display image
     mean, med, std = sigma_clipped_stats(img, sigma=3.0)
     ax.imshow(img, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='lower')
     ax.set_title(f'Frame {frame_idx+1}')
-    ax.set_xlim(0, img.shape[1])
-    ax.set_ylim(0, img.shape[0])
-
-    colors = ['cyan', 'orange', 'red']
     for n, c in enumerate(confirmed):
-        A = c['pos1']
-        B = c['pos2']
+        A, B = c['pos1'], c['pos2']
         step = B - A
         color = colors[n % len(colors)]
-
         if frame_idx == 0:
             pos = A
         elif frame_idx == 1:
@@ -176,9 +156,8 @@ for frame_idx, (ax, img) in enumerate(zip(axes, aligned)):
             pos = B + step
         else:
             pos = B + 2 * step
-
         circle = plt.Circle((pos[0], pos[1]), 15,
-                           color=color, fill=False, linewidth=2)
+                            color=color, fill=False, linewidth=2)
         ax.add_patch(circle)
         ax.text(pos[0]+18, pos[1]+18, f'#{n+1}',
                color=color, fontsize=8, fontweight='bold')
@@ -186,4 +165,32 @@ for frame_idx, (ax, img) in enumerate(zip(axes, aligned)):
 plt.tight_layout()
 plt.savefig('outputs/set203_tracks.png', dpi=150, bbox_inches='tight')
 print("Saved to outputs/set203_tracks.png")
-plt.show()    
+plt.show()
+
+# --- zoom in on candidate #3 ---
+fig2, axes2 = plt.subplots(1, 4, figsize=(20, 5))
+fig2.suptitle('Candidate #3 zoom (739 arcsec/day - NEO-like) 4/4 frames', fontsize=13)
+
+c = confirmed[2]
+A = c['pos1']
+B = c['pos2']
+step = B - A
+positions = [A, B, B+step, B+2*step]
+ZOOM = 80
+
+for frame_idx, (ax, img, pos) in enumerate(zip(axes2, aligned, positions)):
+    mean, med, std = sigma_clipped_stats(img, sigma=3.0)
+    x, y = int(pos[0]), int(pos[1])
+    x1, x2 = max(0, x-ZOOM), min(img.shape[1], x+ZOOM)
+    y1, y2 = max(0, y-ZOOM), min(img.shape[0], y+ZOOM)
+    cutout = img[y1:y2, x1:x2]
+    ax.imshow(cutout, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='lower')
+    ax.set_title(f'Frame {frame_idx+1}  ({x},{y})')
+    circle = plt.Circle((pos[0]-x1, pos[1]-y1), 10,
+                        color='red', fill=False, linewidth=2)
+    ax.add_patch(circle)
+
+plt.tight_layout()
+plt.savefig('outputs/set203_candidate3_zoom.png', dpi=150, bbox_inches='tight')
+print("Saved to outputs/set203_candidate3_zoom.png")
+plt.show()
