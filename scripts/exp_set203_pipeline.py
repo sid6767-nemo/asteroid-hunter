@@ -144,3 +144,46 @@ for n, c in enumerate(confirmed):
     print(f"  Frame 3:   {c['dist3']:.1f}px from predicted position")
     print(f"  Frame 4:   {c['dist4']:.1f}px from predicted position")
     print(f"  Confirmed: {c['hits']+2}/4 frames")
+# --- visualize confirmed candidates across all 4 frames ---
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+print("\nGenerating visualization...")
+
+fig, axes = plt.subplots(1, 4, figsize=(20, 6))
+fig.suptitle(f'Confirmed moving objects: {len(confirmed)}', fontsize=14)
+
+for frame_idx, (ax, img) in enumerate(zip(axes, aligned)):
+    # display image
+    mean, med, std = sigma_clipped_stats(img, sigma=3.0)
+    ax.imshow(img, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='lower')
+    ax.set_title(f'Frame {frame_idx+1}')
+    ax.set_xlim(0, img.shape[1])
+    ax.set_ylim(0, img.shape[0])
+
+    colors = ['cyan', 'orange', 'red']
+    for n, c in enumerate(confirmed):
+        A = c['pos1']
+        B = c['pos2']
+        step = B - A
+        color = colors[n % len(colors)]
+
+        if frame_idx == 0:
+            pos = A
+        elif frame_idx == 1:
+            pos = B
+        elif frame_idx == 2:
+            pos = B + step
+        else:
+            pos = B + 2 * step
+
+        circle = plt.Circle((pos[0], pos[1]), 15,
+                           color=color, fill=False, linewidth=2)
+        ax.add_patch(circle)
+        ax.text(pos[0]+18, pos[1]+18, f'#{n+1}',
+               color=color, fontsize=8, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('outputs/set203_tracks.png', dpi=150, bbox_inches='tight')
+print("Saved to outputs/set203_tracks.png")
+plt.show()    
