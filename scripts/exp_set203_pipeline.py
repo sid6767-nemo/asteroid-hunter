@@ -194,3 +194,51 @@ plt.tight_layout()
 plt.savefig('outputs/set203_candidate3_zoom.png', dpi=150, bbox_inches='tight')
 print("Saved to outputs/set203_candidate3_zoom.png")
 plt.show()
+# --- convert candidate #3's pixel position to RA/Dec ---
+from astropy.wcs import WCS
+import numpy as np
+
+print("\nConverting candidate positions to sky coordinates...")
+
+with fits.open(files[0]) as hdul:
+    hdr = hdul[0].header
+
+w = WCS(naxis=2)
+w.wcs.crpix = [hdr['CRPIX1'], hdr['CRPIX2']]
+w.wcs.cdelt = [hdr['CDELT1'], hdr['CDELT2']]
+w.wcs.crval = [hdr['CRVAL1'], hdr['CRVAL2']]
+w.wcs.ctype = [hdr['CTYPE1'], hdr['CTYPE2']]
+
+# apply rotation manually using CROTA2
+crota = np.radians(hdr['CROTA2'])
+w.wcs.pc = [[np.cos(crota), -np.sin(crota)],
+            [np.sin(crota), np.cos(crota)]]
+
+for n, c in enumerate(confirmed):
+    A = c['pos1']
+    ra, dec = w.all_pix2world(A[0], A[1], 0)
+    print(f"  Candidate #{n+1}: pixel ({A[0]:.0f},{A[1]:.0f}) -> RA={float(ra):.5f}, Dec={float(dec):.5f}")
+# --- query SkyBoT for known objects near each candidate ---
+import requests
+
+print("\nQuerying SkyBoT for known objects at candidate positions...")
+
+jd = mjds[0] + 2400000.5  # convert MJD to JD
+url = "https://vo.imcce.fr/webservices/skybot/conesearch.php"
+
+for n, c in enumerate(confirmed):
+    A = c['pos1']
+    ra, dec = w.all_pix2world(A[0], A[1], 0)
+    ra, dec = float(ra), float(dec)
+
+    params = {
+        "RA": ra,
+        "DEC": dec,
+        "SR": 0.1,        # search radius in degrees (~360 arcsec)
+        "EPOCH": jd,
+        "-mime": "text",
+        "-output": "all"
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    print(f"\n--- Candidate #{n+1} (RA={ra:.5f}, Dec={dec:.5f}) ---")
+    print(resp.text)    
