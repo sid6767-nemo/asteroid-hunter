@@ -52,3 +52,13 @@ filter those down, I predicted where each candidate should appear in frames 3 an
 based on its speed and direction. Anything that didn't show up near the predicted
 position in at least 2 frames was rejected. 3 candidates survived (739 arcsec/day
 NEO-like, 153 arcsec/day main-belt, 70 arcsec/day main-belt).
+
+## Day 18: visualization and SkyBot cross-match
+
+Built a four-frame visualization showing each candidate's confirmed positions
+across all four images, plus a zoomed-in view of candidate #3. Converted each
+candidate's position into real sky coordinates and checked them against
+SkyBot, a database of known asteroids, to see if each was new or already
+found. Candidate #3 matched a real asteroid within 4 arcseconds, strong proof
+the pipeline works. Candidates #1 and #2 had no match, probably meaning they
+were artifacts rather than real objects.
