@@ -218,27 +218,25 @@ for n, c in enumerate(confirmed):
     A = c['pos1']
     ra, dec = w.all_pix2world(A[0], A[1], 0)
     print(f"  Candidate #{n+1}: pixel ({A[0]:.0f},{A[1]:.0f}) -> RA={float(ra):.5f}, Dec={float(dec):.5f}")
-# --- query SkyBoT for known objects near each candidate ---
-import requests
+# --- query SkyBoT via astroquery for known objects ---
+from astroquery.imcce import Skybot
+from astropy.coordinates import SkyCoord
+from astropy.time import Time
+import astropy.units as u
 
-print("\nQuerying SkyBoT for known objects at candidate positions...")
+print("\nQuerying SkyBoT (via astroquery) for known objects...")
 
-jd = mjds[0] + 2400000.5  # convert MJD to JD
-url = "https://vo.imcce.fr/webservices/skybot/conesearch.php"
+epoch = Time(mjds[0], format='mjd')
 
 for n, c in enumerate(confirmed):
     A = c['pos1']
     ra, dec = w.all_pix2world(A[0], A[1], 0)
     ra, dec = float(ra), float(dec)
+    field = SkyCoord(ra=ra, dec=dec, unit='deg')
 
-    params = {
-        "RA": ra,
-        "DEC": dec,
-        "SR": 0.1,        # search radius in degrees (~360 arcsec)
-        "EPOCH": jd,
-        "-mime": "text",
-        "-output": "all"
-    }
-    resp = requests.get(url, params=params, timeout=15)
     print(f"\n--- Candidate #{n+1} (RA={ra:.5f}, Dec={dec:.5f}) ---")
-    print(resp.text)    
+    try:
+        results = Skybot.cone_search(field, 0.1 * u.deg, epoch)
+        print(results)
+    except Exception as e:
+        print(f"  No known objects found, or query failed: {e}")
