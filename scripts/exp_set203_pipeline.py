@@ -69,13 +69,17 @@ print("\nFinding candidates (frame 1 -> frame 2)...")
 pos1 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[0]])
 pos2 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[1]])
 
+tree1 = KDTree(pos1)
 tree2 = KDTree(pos2)
-dists, idxs = tree2.query(pos1)
+dists_fwd, idxs_fwd = tree2.query(pos1)   # frame1 -> frame2
+dists_bwd, idxs_bwd = tree1.query(pos2)   # frame2 -> frame1
 
 candidates = []
-for i, (dist, j) in enumerate(zip(dists, idxs)):
+for i, (dist, j) in enumerate(zip(dists_fwd, idxs_fwd)):
     if MIN_MOVE < dist < MAX_MOVE:
-        candidates.append({'pos1': pos1[i], 'pos2': pos2[j], 'dist': dist})
+        # mutual check: does frame2's source j also pick frame1's source i as its nearest?
+        if idxs_bwd[j] == i:
+            candidates.append({'pos1': pos1[i], 'pos2': pos2[j], 'dist': dist})
 
 print(f"  {len(candidates)} candidate(s) between frame 1 and 2")
 
@@ -240,3 +244,119 @@ for n, c in enumerate(confirmed):
         print(results)
     except Exception as e:
         print(f"  No known objects found, or query failed: {e}")
+# --- find ALL known asteroids in the full field ---
+print("\nQuerying SkyBoT for ALL known objects in the field...")
+
+# field center in RA/Dec
+center_ra, center_dec = w.all_pix2world(aligned[0].shape[1]/2, aligned[0].shape[0]/2, 0)
+center_ra, center_dec = float(center_ra), float(center_dec)
+field_center = SkyCoord(ra=center_ra, dec=center_dec, unit='deg')
+
+print(f"Field center: RA={center_ra:.5f}, Dec={center_dec:.5f}")
+
+try:
+    field_results = Skybot.cone_search(field_center, 0.2 * u.deg, epoch)
+    print(f"\nFound {len(field_results)} known object(s) in field:\n")
+    def safe_float(x):
+        try:
+            return float(x.value)
+        except AttributeError:
+            return float(x)
+
+    for row in field_results:
+        try:
+            ra_obj = safe_float(row['RA'])
+            dec_obj = safe_float(row['DEC'])
+            name = row['Name']
+            v_mag = safe_float(row['V'])
+            px, py = w.all_world2pix(ra_obj, dec_obj, 0)
+            px, py = safe_float(px), safe_float(py)
+            in_frame = (0 <= px <= aligned[0].shape[1]) and (0 <= py <= aligned[0].shape[0])
+            flag = "IN FRAME" if in_frame else "outside frame"
+            print(f"  {name}: RA={ra_obj:.5f}, Dec={dec_obj:.5f}, "
+                  f"V={v_mag:.2f}, pixel=({px:.0f},{py:.0f})  [{flag}]")
+        except Exception as row_e:
+            print(f"  (skipped a row: {row_e})")
+except Exception as e:
+    print(f"  Query failed: {e}") 
+
+# --- diagnose why known objects were missed ---
+print("\n\nDiagnosing missed known objects...")
+
+missed = {
+    "2002 GE56": (171.27461, 3.26445),
+    "2021 RY128": (171.37278, 3.30067),
+    "2015 RM287": (171.37743, 3.22112),
+    "2002 QK157": (171.41576, 3.25610),
+}
+
+pos1_arr = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[0]])
+tree_f1 = KDTree(pos1_arr)
+
+for name, (ra_m, dec_m) in missed.items():
+    px, py = w.all_world2pix(ra_m, dec_m, 0)
+    px, py = float(px), float(py)
+    dist, idx = tree_f1.query([px, py])
+    print(f"\n{name}: predicted pixel ({px:.0f},{py:.0f})")
+    if dist < 15:
+        print(f"  -> DETECTED in frame 1, {dist:.1f}px from a real source. "
+              f"It was found but never matched/confirmed.")
+    else:
+        print(f"  -> NOT detected in frame 1 (nearest source is {dist:.1f}px away). "
+              f"Below threshold or blended.")
+
+# --- trace 2002 GE56 through the matching pipeline ---
+print("\nTracing 2002 GE56 through the candidate pipeline...")
+target_px, target_py = 674, 2088
+near_candidates = [c for c in candidates
+                    if np.hypot(c['pos1'][0]-target_px, c['pos1'][1]-target_py) < 20]
+print(f"Found {len(near_candidates)} raw candidate(s) near (674,2088):")
+for c in near_candidates:
+    A, B = c['pos1'], c['pos2']
+    print(f"  pos1=({A[0]:.0f},{A[1]:.0f}) -> pos2=({B[0]:.0f},{B[1]:.0f}), moved {c['dist']:.1f}px")
+
+if not near_candidates:
+    print("  -> Never appeared among the 96 raw candidates at all.")
+    print("     Likely reason: its actual frame1->frame2 motion was outside")
+    print("     our MIN_MOVE=3px / MAX_MOVE=100px window, or the nearest-neighbor")
+    print("     matcher paired it with the wrong (closer) star instead.")
+
+# --- check why 2002 GE56's candidate failed the line-check ---
+print("\nChecking why 2002 GE56's candidate failed the line-check...")
+A = np.array([664, 2077])
+B = np.array([636, 2100])
+step = B - A
+pred3 = B + step
+pred4 = B + 2 * step
+dist3, _ = tree3.query(pred3)
+dist4, _ = tree4.query(pred4)
+print(f"  Predicted frame3 position: ({pred3[0]:.0f},{pred3[1]:.0f}), nearest real source: {dist3:.1f}px away")
+print(f"  Predicted frame4 position: ({pred4[0]:.0f},{pred4[1]:.0f}), nearest real source: {dist4:.1f}px away")
+print(f"  (CONFIRM_RADIUS is currently {CONFIRM_RADIUS}px)")            
+
+# --- verify 2002 GE56's true frame2 position independently ---
+def safe_float2(x):
+    try:
+        return float(x.value)
+    except AttributeError:
+        return float(x)
+
+print("\nChecking 2002 GE56's true position in frame 2 (independent check)...")
+ge56_coord = SkyCoord(ra=171.27461, dec=3.26445, unit='deg')
+epoch2 = Time(mjds[1], format='mjd')
+
+try:
+    ge56_f2 = Skybot.cone_search(ge56_coord, 0.02 * u.deg, epoch2)
+    for row in ge56_f2:
+        ra2 = safe_float2(row['RA'])
+        dec2 = safe_float2(row['DEC'])
+        px2, py2 = w.all_world2pix(ra2, dec2, 0)
+        print(f"  True frame2 pixel position: ({safe_float2(px2):.0f},{safe_float2(py2):.0f})")
+    print(f"  Our pipeline matched it to: (636,2100)")
+except Exception as e:
+    print(f"  Query failed: {e}")
+print("\nChecking if a real source was detected near GE56's true frame2 position...")
+pos2_arr = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[1]])
+tree_f2_check = KDTree(pos2_arr)
+dist2, idx2 = tree_f2_check.query([674, 2133])
+print(f"  Nearest detected source in frame2: {dist2:.1f}px away from true position")    
