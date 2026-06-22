@@ -60,39 +60,91 @@ for i, img in enumerate(aligned):
         print(f"  Frame {i+1}: {len(sources)} sources")
     all_sources.append(sources)
 
-# --- find candidates between frame 1 and frame 2 ---
+# --- setup positions and trees for all frames ---
 MIN_MOVE = 3
 MAX_MOVE = 100
-
-print("\nFinding candidates (frame 1 -> frame 2)...")
+CONFIRM_RADIUS = 5
 
 pos1 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[0]])
 pos2 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[1]])
+pos3 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[2]])
+pos4 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[3]])
 
 tree1 = KDTree(pos1)
 tree2 = KDTree(pos2)
-dists_fwd, idxs_fwd = tree2.query(pos1)   # frame1 -> frame2
-dists_bwd, idxs_bwd = tree1.query(pos2)   # frame2 -> frame1
+tree3 = KDTree(pos3)
+tree4 = KDTree(pos4)
+
+# --- find candidates between frame 1 and frame 2 (mutual nearest-neighbor) ---
+print("\nFinding candidates (frame 1 -> frame 2)...")
+
+dists_fwd, idxs_fwd = tree2.query(pos1)
+dists_bwd, idxs_bwd = tree1.query(pos2)
 
 candidates = []
 for i, (dist, j) in enumerate(zip(dists_fwd, idxs_fwd)):
     if MIN_MOVE < dist < MAX_MOVE:
-        # mutual check: does frame2's source j also pick frame1's source i as its nearest?
         if idxs_bwd[j] == i:
             candidates.append({'pos1': pos1[i], 'pos2': pos2[j], 'dist': dist})
 
 print(f"  {len(candidates)} candidate(s) between frame 1 and 2")
 
-# --- line check ---
-CONFIRM_RADIUS = 5
+# --- also find candidates from frame 2->3 and frame 3->4 ---
+print("\nFinding additional candidates from frame 2->3 and frame 3->4...")
 
-pos3 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[2]])
-pos4 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[3]])
+def find_mutual_candidates(posA, posB, gap_idx):
+    treeA = KDTree(posA)
+    treeB = KDTree(posB)
+    dists_fwd, idxs_fwd = treeB.query(posA)
+    dists_bwd, idxs_bwd = treeA.query(posB)
+    cands = []
+    for i, (dist, j) in enumerate(zip(dists_fwd, idxs_fwd)):
+        if MIN_MOVE < dist < MAX_MOVE:
+            if idxs_bwd[j] == i:
+                cands.append({'pos1': posA[i], 'pos2': posB[j],
+                              'dist': dist, 'gap_idx': gap_idx})
+    return cands
 
-tree3 = KDTree(pos3)
-tree4 = KDTree(pos4)
+cands_23 = find_mutual_candidates(pos2, pos3, 1)
+cands_34 = find_mutual_candidates(pos3, pos4, 2)
+print(f"  Frame 2->3: {len(cands_23)} candidates")
+print(f"  Frame 3->4: {len(cands_34)} candidates")
 
-print("\nRunning line-check on candidates...")
+# --- run line check on additional candidates ---
+print("\nRunning line-check on additional candidates...")
+
+for extra_cands, label, gi in [(cands_23, "2->3", 1), (cands_34, "3->4", 2)]:
+    for c in extra_cands:
+        A = c['pos1']
+        B = c['pos2']
+        step = B - A
+        pred_prev = A - step
+        pred_next = B + step
+
+        if gi == 1:
+            dist_prev, _ = tree1.query(pred_prev)
+            dist_next, _ = tree4.query(pred_next)
+        else:
+            dist_prev, _ = tree2.query(pred_prev)
+            dist_next, _ = (999, 0)
+
+        hits = 0
+        if dist_prev < CONFIRM_RADIUS:
+            hits += 1
+        if dist_next < CONFIRM_RADIUS:
+            hits += 1
+
+        if hits >= 1:
+            rate = c['dist'] * PIXEL_SCALE / (gaps[gi] / (24*60))
+            near_obj1 = (np.hypot(A[0]-664, A[1]-2077) < 50 or
+                        np.hypot(B[0]-674, B[1]-2133) < 50)
+            flag = " *** NEAR OBJ0001 ***" if near_obj1 else ""
+            print(f"  [{label}] CONFIRMED: {c['dist']:.1f}px = {rate:.0f} arcsec/day "
+                  f"({A[0]:.0f},{A[1]:.0f})->({B[0]:.0f},{B[1]:.0f}) "
+                  f"| {hits+2}/4 frames{flag}")
+
+# --- line check on frame 1->2 candidates ---
+print("\nRunning line-check on frame 1->2 candidates...")
 confirmed = []
 for n, c in enumerate(candidates):
     A = c['pos1']
@@ -146,7 +198,7 @@ fig.suptitle(f'Confirmed moving objects: {len(confirmed)}', fontsize=14)
 colors = ['cyan', 'orange', 'red']
 for frame_idx, (ax, img) in enumerate(zip(axes, aligned)):
     mean, med, std = sigma_clipped_stats(img, sigma=3.0)
-    ax.imshow(img, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='lower')
+    ax.imshow(img, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='upper')
     ax.set_title(f'Frame {frame_idx+1}')
     for n, c in enumerate(confirmed):
         A, B = c['pos1'], c['pos2']
@@ -172,35 +224,33 @@ print("Saved to outputs/set203_tracks.png")
 plt.show()
 
 # --- zoom in on candidate #3 ---
-fig2, axes2 = plt.subplots(1, 4, figsize=(20, 5))
-fig2.suptitle('Candidate #3 zoom (739 arcsec/day - NEO-like) 4/4 frames', fontsize=13)
+if len(confirmed) >= 3:
+    fig2, axes2 = plt.subplots(1, 4, figsize=(20, 5))
+    fig2.suptitle('Candidate #3 zoom (NEO-like) 4/4 frames', fontsize=13)
+    c = confirmed[2]
+    A = c['pos1']
+    B = c['pos2']
+    step = B - A
+    positions = [A, B, B+step, B+2*step]
+    ZOOM = 80
+    for frame_idx, (ax, img, pos) in enumerate(zip(axes2, aligned, positions)):
+        mean, med, std = sigma_clipped_stats(img, sigma=3.0)
+        x, y = int(pos[0]), int(pos[1])
+        x1, x2 = max(0, x-ZOOM), min(img.shape[1], x+ZOOM)
+        y1, y2 = max(0, y-ZOOM), min(img.shape[0], y+ZOOM)
+        cutout = img[y1:y2, x1:x2]
+        ax.imshow(cutout, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='upper')
+        ax.set_title(f'Frame {frame_idx+1}  ({x},{y})')
+        circle = plt.Circle((pos[0]-x1, pos[1]-y1), 10,
+                            color='red', fill=False, linewidth=2)
+        ax.add_patch(circle)
+    plt.tight_layout()
+    plt.savefig('outputs/set203_candidate3_zoom.png', dpi=150, bbox_inches='tight')
+    print("Saved to outputs/set203_candidate3_zoom.png")
+    plt.show()
 
-c = confirmed[2]
-A = c['pos1']
-B = c['pos2']
-step = B - A
-positions = [A, B, B+step, B+2*step]
-ZOOM = 80
-
-for frame_idx, (ax, img, pos) in enumerate(zip(axes2, aligned, positions)):
-    mean, med, std = sigma_clipped_stats(img, sigma=3.0)
-    x, y = int(pos[0]), int(pos[1])
-    x1, x2 = max(0, x-ZOOM), min(img.shape[1], x+ZOOM)
-    y1, y2 = max(0, y-ZOOM), min(img.shape[0], y+ZOOM)
-    cutout = img[y1:y2, x1:x2]
-    ax.imshow(cutout, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='lower')
-    ax.set_title(f'Frame {frame_idx+1}  ({x},{y})')
-    circle = plt.Circle((pos[0]-x1, pos[1]-y1), 10,
-                        color='red', fill=False, linewidth=2)
-    ax.add_patch(circle)
-
-plt.tight_layout()
-plt.savefig('outputs/set203_candidate3_zoom.png', dpi=150, bbox_inches='tight')
-print("Saved to outputs/set203_candidate3_zoom.png")
-plt.show()
-# --- convert candidate #3's pixel position to RA/Dec ---
+# --- convert candidate positions to RA/Dec ---
 from astropy.wcs import WCS
-import numpy as np
 
 print("\nConverting candidate positions to sky coordinates...")
 
@@ -212,8 +262,6 @@ w.wcs.crpix = [hdr['CRPIX1'], hdr['CRPIX2']]
 w.wcs.cdelt = [hdr['CDELT1'], hdr['CDELT2']]
 w.wcs.crval = [hdr['CRVAL1'], hdr['CRVAL2']]
 w.wcs.ctype = [hdr['CTYPE1'], hdr['CTYPE2']]
-
-# apply rotation manually using CROTA2
 crota = np.radians(hdr['CROTA2'])
 w.wcs.pc = [[np.cos(crota), -np.sin(crota)],
             [np.sin(crota), np.cos(crota)]]
@@ -222,14 +270,14 @@ for n, c in enumerate(confirmed):
     A = c['pos1']
     ra, dec = w.all_pix2world(A[0], A[1], 0)
     print(f"  Candidate #{n+1}: pixel ({A[0]:.0f},{A[1]:.0f}) -> RA={float(ra):.5f}, Dec={float(dec):.5f}")
-# --- query SkyBoT via astroquery for known objects ---
+
+# --- query SkyBoT ---
 from astroquery.imcce import Skybot
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
 import astropy.units as u
 
 print("\nQuerying SkyBoT (via astroquery) for known objects...")
-
 epoch = Time(mjds[0], format='mjd')
 
 for n, c in enumerate(confirmed):
@@ -237,32 +285,28 @@ for n, c in enumerate(confirmed):
     ra, dec = w.all_pix2world(A[0], A[1], 0)
     ra, dec = float(ra), float(dec)
     field = SkyCoord(ra=ra, dec=dec, unit='deg')
-
     print(f"\n--- Candidate #{n+1} (RA={ra:.5f}, Dec={dec:.5f}) ---")
     try:
         results = Skybot.cone_search(field, 0.1 * u.deg, epoch)
         print(results)
     except Exception as e:
         print(f"  No known objects found, or query failed: {e}")
-# --- find ALL known asteroids in the full field ---
-print("\nQuerying SkyBoT for ALL known objects in the field...")
 
-# field center in RA/Dec
+# --- find ALL known asteroids in field ---
+print("\nQuerying SkyBoT for ALL known objects in the field...")
 center_ra, center_dec = w.all_pix2world(aligned[0].shape[1]/2, aligned[0].shape[0]/2, 0)
 center_ra, center_dec = float(center_ra), float(center_dec)
 field_center = SkyCoord(ra=center_ra, dec=center_dec, unit='deg')
 
-print(f"Field center: RA={center_ra:.5f}, Dec={center_dec:.5f}")
+def safe_float(x):
+    try:
+        return float(x.value)
+    except AttributeError:
+        return float(x)
 
 try:
     field_results = Skybot.cone_search(field_center, 0.2 * u.deg, epoch)
     print(f"\nFound {len(field_results)} known object(s) in field:\n")
-    def safe_float(x):
-        try:
-            return float(x.value)
-        except AttributeError:
-            return float(x)
-
     for row in field_results:
         try:
             ra_obj = safe_float(row['RA'])
@@ -278,85 +322,23 @@ try:
         except Exception as row_e:
             print(f"  (skipped a row: {row_e})")
 except Exception as e:
-    print(f"  Query failed: {e}") 
+    print(f"  Query failed: {e}")
 
-# --- diagnose why known objects were missed ---
+# --- diagnose missed objects ---
 print("\n\nDiagnosing missed known objects...")
-
 missed = {
     "2002 GE56": (171.27461, 3.26445),
     "2021 RY128": (171.37278, 3.30067),
     "2015 RM287": (171.37743, 3.22112),
     "2002 QK157": (171.41576, 3.25610),
 }
-
-pos1_arr = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[0]])
-tree_f1 = KDTree(pos1_arr)
-
+tree_f1 = KDTree(pos1)
 for name, (ra_m, dec_m) in missed.items():
     px, py = w.all_world2pix(ra_m, dec_m, 0)
     px, py = float(px), float(py)
     dist, idx = tree_f1.query([px, py])
     print(f"\n{name}: predicted pixel ({px:.0f},{py:.0f})")
     if dist < 15:
-        print(f"  -> DETECTED in frame 1, {dist:.1f}px from a real source. "
-              f"It was found but never matched/confirmed.")
+        print(f"  -> DETECTED in frame 1, {dist:.1f}px from a real source.")
     else:
-        print(f"  -> NOT detected in frame 1 (nearest source is {dist:.1f}px away). "
-              f"Below threshold or blended.")
-
-# --- trace 2002 GE56 through the matching pipeline ---
-print("\nTracing 2002 GE56 through the candidate pipeline...")
-target_px, target_py = 674, 2088
-near_candidates = [c for c in candidates
-                    if np.hypot(c['pos1'][0]-target_px, c['pos1'][1]-target_py) < 20]
-print(f"Found {len(near_candidates)} raw candidate(s) near (674,2088):")
-for c in near_candidates:
-    A, B = c['pos1'], c['pos2']
-    print(f"  pos1=({A[0]:.0f},{A[1]:.0f}) -> pos2=({B[0]:.0f},{B[1]:.0f}), moved {c['dist']:.1f}px")
-
-if not near_candidates:
-    print("  -> Never appeared among the 96 raw candidates at all.")
-    print("     Likely reason: its actual frame1->frame2 motion was outside")
-    print("     our MIN_MOVE=3px / MAX_MOVE=100px window, or the nearest-neighbor")
-    print("     matcher paired it with the wrong (closer) star instead.")
-
-# --- check why 2002 GE56's candidate failed the line-check ---
-print("\nChecking why 2002 GE56's candidate failed the line-check...")
-A = np.array([664, 2077])
-B = np.array([636, 2100])
-step = B - A
-pred3 = B + step
-pred4 = B + 2 * step
-dist3, _ = tree3.query(pred3)
-dist4, _ = tree4.query(pred4)
-print(f"  Predicted frame3 position: ({pred3[0]:.0f},{pred3[1]:.0f}), nearest real source: {dist3:.1f}px away")
-print(f"  Predicted frame4 position: ({pred4[0]:.0f},{pred4[1]:.0f}), nearest real source: {dist4:.1f}px away")
-print(f"  (CONFIRM_RADIUS is currently {CONFIRM_RADIUS}px)")            
-
-# --- verify 2002 GE56's true frame2 position independently ---
-def safe_float2(x):
-    try:
-        return float(x.value)
-    except AttributeError:
-        return float(x)
-
-print("\nChecking 2002 GE56's true position in frame 2 (independent check)...")
-ge56_coord = SkyCoord(ra=171.27461, dec=3.26445, unit='deg')
-epoch2 = Time(mjds[1], format='mjd')
-
-try:
-    ge56_f2 = Skybot.cone_search(ge56_coord, 0.02 * u.deg, epoch2)
-    for row in ge56_f2:
-        ra2 = safe_float2(row['RA'])
-        dec2 = safe_float2(row['DEC'])
-        px2, py2 = w.all_world2pix(ra2, dec2, 0)
-        print(f"  True frame2 pixel position: ({safe_float2(px2):.0f},{safe_float2(py2):.0f})")
-    print(f"  Our pipeline matched it to: (636,2100)")
-except Exception as e:
-    print(f"  Query failed: {e}")
-print("\nChecking if a real source was detected near GE56's true frame2 position...")
-pos2_arr = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[1]])
-tree_f2_check = KDTree(pos2_arr)
-dist2, idx2 = tree_f2_check.query([674, 2133])
-print(f"  Nearest detected source in frame2: {dist2:.1f}px away from true position")    
+        print(f"  -> NOT detected in frame 1 (nearest source is {dist:.1f}px away).")
