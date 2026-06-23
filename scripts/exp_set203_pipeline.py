@@ -65,6 +65,16 @@ MIN_MOVE = 3
 MAX_MOVE = 100
 CONFIRM_RADIUS = 5
 
+def classify(rate):
+    if rate < 1:
+        return "too slow -> likely star or artifact"
+    elif rate < 50:
+        return "slow -> TNO-like"
+    elif rate < 500:
+        return "main-belt asteroid range"
+    else:
+        return "fast -> NEO-like"
+
 pos1 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[0]])
 pos2 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[1]])
 pos3 = np.array([[s['x_centroid'], s['y_centroid']] for s in all_sources[2]])
@@ -110,75 +120,44 @@ cands_34 = find_mutual_candidates(pos3, pos4, 2)
 print(f"  Frame 2->3: {len(cands_23)} candidates")
 print(f"  Frame 3->4: {len(cands_34)} candidates")
 
-# --- run line check on additional candidates ---
-print("\nRunning line-check on additional candidates...")
+# --- unified line-check across all starting pairs ---
+print("\nRunning unified line-check across all frame pairs...")
+confirmed = []
 
-for extra_cands, label, gi in [(cands_23, "2->3", 1), (cands_34, "3->4", 2)]:
-    for c in extra_cands:
+def line_check_and_add(cands, start_gap):
+    for c in cands:
         A = c['pos1']
         B = c['pos2']
         step = B - A
-        pred_prev = A - step
-        pred_next = B + step
-
-        if gi == 1:
-            dist_prev, _ = tree1.query(pred_prev)
-            dist_next, _ = tree4.query(pred_next)
-        else:
-            dist_prev, _ = tree2.query(pred_prev)
-            dist_next, _ = (999, 0)
-
+        frame_positions = [A - step*start_gap + step*i for i in range(4)]
         hits = 0
-        if dist_prev < CONFIRM_RADIUS:
-            hits += 1
-        if dist_next < CONFIRM_RADIUS:
-            hits += 1
+        frame_dists = []
+        for fi, (tree, pred) in enumerate(zip([tree1, tree2, tree3, tree4], frame_positions)):
+            d, _ = tree.query(pred)
+            frame_dists.append(d)
+            if d < CONFIRM_RADIUS:
+                hits += 1
+        if hits >= 3:
+            rate = c['dist'] * PIXEL_SCALE / (gaps[start_gap] / (24*60))
+            is_dup = any(
+                np.hypot(A[0]-e['pos1'][0], A[1]-e['pos1'][1]) < 20
+                for e in confirmed
+            )
+            if not is_dup:
+                confirmed.append({**c, 'rate': rate, 'hits': hits,
+                                 'frame_dists': frame_dists})
+                near_obj1 = np.hypot(A[0]-664, A[1]-2077) < 50
+                flag = " *** OBJ0001/GE56 ***" if near_obj1 else ""
+                print(f"  CONFIRMED #{len(confirmed)}: {c['dist']:.1f}px = "
+                      f"{rate:.0f} arcsec/day "
+                      f"({A[0]:.0f},{A[1]:.0f})->({B[0]:.0f},{B[1]:.0f}) "
+                      f"| {hits}/4 frames{flag}")
 
-        if hits >= 1:
-            rate = c['dist'] * PIXEL_SCALE / (gaps[gi] / (24*60))
-            near_obj1 = (np.hypot(A[0]-664, A[1]-2077) < 50 or
-                        np.hypot(B[0]-674, B[1]-2133) < 50)
-            flag = " *** NEAR OBJ0001 ***" if near_obj1 else ""
-            print(f"  [{label}] CONFIRMED: {c['dist']:.1f}px = {rate:.0f} arcsec/day "
-                  f"({A[0]:.0f},{A[1]:.0f})->({B[0]:.0f},{B[1]:.0f}) "
-                  f"| {hits+2}/4 frames{flag}")
+line_check_and_add(candidates, 0)
+line_check_and_add(cands_23, 1)
+line_check_and_add(cands_34, 2)
 
-# --- line check on frame 1->2 candidates ---
-print("\nRunning line-check on frame 1->2 candidates...")
-confirmed = []
-for n, c in enumerate(candidates):
-    A = c['pos1']
-    B = c['pos2']
-    step = B - A
-    pred3 = B + step
-    pred4 = B + 2 * step
-    dist3, _ = tree3.query(pred3)
-    dist4, _ = tree4.query(pred4)
-    hits = 0
-    if dist3 < CONFIRM_RADIUS:
-        hits += 1
-    if dist4 < CONFIRM_RADIUS:
-        hits += 1
-    if hits >= 1:
-        rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
-        confirmed.append({**c, 'pred3': pred3, 'pred4': pred4,
-                         'dist3': dist3, 'dist4': dist4, 'hits': hits})
-        print(f"  CONFIRMED #{len(confirmed)}: {c['dist']:.1f} px = {rate:.0f} arcsec/day "
-              f"({A[0]:.0f},{A[1]:.0f})->({B[0]:.0f},{B[1]:.0f}) "
-              f"| frame3: {dist3:.1f}px off | frame4: {dist4:.1f}px off "
-              f"| {hits+2}/4 frames")
-
-def classify(rate):
-    if rate < 1:
-        return "too slow -> likely star or artifact"
-    elif rate < 50:
-        return "slow -> TNO-like"
-    elif rate < 500:
-        return "main-belt asteroid range"
-    else:
-        return "fast -> NEO-like"
-
-print(f"\n{len(confirmed)} candidate(s) survived line-check out of {len(candidates)}")
+print(f"\n{len(confirmed)} total confirmed candidate(s)")
 print("\n=== FINAL CONFIRMED CANDIDATES ===")
 for n, c in enumerate(confirmed):
     rate = c['dist'] * PIXEL_SCALE / (gaps[0] / (24*60))
@@ -186,10 +165,8 @@ for n, c in enumerate(confirmed):
     print(f"\nCandidate #{n+1}")
     print(f"  Speed:     {rate:.0f} arcsec/day  ->  {classify(rate)}")
     print(f"  Track:     ({A[0]:.0f},{A[1]:.0f}) -> ({B[0]:.0f},{B[1]:.0f})")
-    print(f"  Frame 3:   {c['dist3']:.1f}px from predicted position")
-    print(f"  Frame 4:   {c['dist4']:.1f}px from predicted position")
-    print(f"  Confirmed: {c['hits']+2}/4 frames")
-
+    print(f"  Frame dists: {[f'{d:.1f}' for d in c['frame_dists']]}")
+    print(f"  Confirmed: {c['hits']}/4 frames")
 # --- visualize all 4 frames with confirmed candidates ---
 print("\nGenerating visualization...")
 fig, axes = plt.subplots(1, 4, figsize=(20, 6))
