@@ -45,7 +45,22 @@ mask0 = (aligned[0] == 0)
 _, ref_median, ref_std = sigma_clipped_stats(aligned[0], sigma=3.0, mask=mask0)
 THRESHOLD = 4.2 * ref_std
 print(f"\nReference std={ref_std:.1f}, global threshold={THRESHOLD:.1f} counts")
+# --- find saturated/very bright regions (bright stars) to avoid ---
+# use a fixed multiple of the noise above the median, ignoring zero-padding
+valid_pixels = aligned[0][aligned[0] > 0]
+img_median = np.median(valid_pixels)
+SATURATION_LEVEL = img_median + 200 * ref_std  # very bright = bright star
+bright_mask = aligned[0] > SATURATION_LEVEL
+bright_ys, bright_xs = np.where(bright_mask)
+bright_pixels = np.column_stack([bright_xs, bright_ys])
+if len(bright_pixels) > 0:
+    bright_tree = KDTree(bright_pixels)
+    print(f"Found {len(bright_pixels)} saturated pixels (level>{SATURATION_LEVEL:.0f})")
+else:
+    bright_tree = None
+    print("No saturated pixels found")
 
+BRIGHT_REJECT_RADIUS = 200  # reject candidates within this many px of a bright star
 print("\nDetecting sources in each frame...")
 all_sources = []
 for i, img in enumerate(aligned):
@@ -139,13 +154,22 @@ def line_check_and_add(cands, start_gap):
                 hits += 1
         if hits >= 3:
             rate = c['dist'] * PIXEL_SCALE / (gaps[start_gap] / (24*60))
+            frame1_pos = frame_positions[0]   # where this track would be in frame 1
+
+            # reject if near a saturated bright star
+            if bright_tree is not None:
+                bright_dist, _ = bright_tree.query([A[0], A[1]])
+                if bright_dist < BRIGHT_REJECT_RADIUS:
+                    continue  # too close to a bright star, skip
             is_dup = any(
-                np.hypot(A[0]-e['pos1'][0], A[1]-e['pos1'][1]) < 20
+                np.hypot(frame1_pos[0]-e['frame1_pos'][0],
+                         frame1_pos[1]-e['frame1_pos'][1]) < 30
                 for e in confirmed
             )
             if not is_dup:
                 confirmed.append({**c, 'rate': rate, 'hits': hits,
-                                 'frame_dists': frame_dists})
+                                 'frame_dists': frame_dists,
+                                 'frame1_pos': frame1_pos})
                 near_obj1 = np.hypot(A[0]-664, A[1]-2077) < 50
                 flag = " *** OBJ0001/GE56 ***" if near_obj1 else ""
                 print(f"  CONFIRMED #{len(confirmed)}: {c['dist']:.1f}px = "
