@@ -43,7 +43,7 @@ print(f"\nAligned {len(aligned)} of 4 frames successfully.")
 # --- detect sources in each aligned frame ---
 mask0 = (aligned[0] == 0)
 _, ref_median, ref_std = sigma_clipped_stats(aligned[0], sigma=3.0, mask=mask0)
-THRESHOLD = 4.2 * ref_std
+THRESHOLD = 3.0 * ref_std
 print(f"\nReference std={ref_std:.1f}, global threshold={THRESHOLD:.1f} counts")
 # --- find saturated/very bright regions (bright stars) to avoid ---
 # use a fixed multiple of the noise above the median, ignoring zero-padding
@@ -61,18 +61,40 @@ else:
     print("No saturated pixels found")
 
 BRIGHT_REJECT_RADIUS = 200  # reject candidates within this many px of a bright star
-print("\nDetecting sources in each frame...")
+print("\nDetecting sources in each frame (segmentation + deblending)...")
+from photutils.segmentation import detect_sources, deblend_sources, SourceCatalog
+
 all_sources = []
 for i, img in enumerate(aligned):
     mask = (img == 0)
     _, median, _ = sigma_clipped_stats(img, sigma=3.0, mask=mask)
-    dao = DAOStarFinder(fwhm=5.0, threshold=THRESHOLD)
-    sources = dao(img - median, mask=mask)
-    if sources is None:
-        sources = []
+    data = img - median
+
+    # step 1: segmentation - find connected bright regions
+    segment_map = detect_sources(data, THRESHOLD, n_pixels=5, mask=mask)
+
+    if segment_map is None:
+        all_sources.append([])
         print(f"  Frame {i+1}: 0 sources")
-    else:
-        print(f"  Frame {i+1}: {len(sources)} sources")
+        continue
+
+    # step 2: deblend - split merged blobs into separate sources
+    segm_deblend = deblend_sources(data, segment_map,
+                                    n_pixels=5, n_levels=32, contrast=0.0001)
+
+    # step 3: catalog - measure each source
+    cat = SourceCatalog(data, segm_deblend, mask=mask)
+    tbl = cat.to_table()
+
+    # repackage into the same format the rest of the script expects
+    sources = []
+    for row in tbl:
+        sources.append({
+            'x_centroid': float(row['x_centroid']),
+            'y_centroid': float(row['y_centroid']),
+        })
+
+    print(f"  Frame {i+1}: {len(sources)} sources")
     all_sources.append(sources)
 
 # --- setup positions and trees for all frames ---
@@ -345,3 +367,10 @@ for name, (ra_m, dec_m) in missed.items():
         print(f"  -> DETECTED in frame 1, {dist:.1f}px from a real source.")
     else:
         print(f"  -> NOT detected in frame 1 (nearest source is {dist:.1f}px away).")
+print("\nChecking candidate #1 vs 2015 RM287...")
+rm287_px, rm287_py = 211, 592
+c1 = confirmed[0]['pos1']
+dist_c1 = np.hypot(c1[0]-rm287_px, c1[1]-rm287_py)
+print(f"  Candidate #1 at ({c1[0]:.0f},{c1[1]:.0f})")
+print(f"  RM287 true position: ({rm287_px},{rm287_py})")
+print(f"  Distance: {dist_c1:.1f}px")        
