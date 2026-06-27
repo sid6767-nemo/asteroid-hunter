@@ -192,23 +192,7 @@ for n, c in enumerate(confirmed):
     print(f"  Frame dists: {[f'{d:.1f}' for d in c['frame_dists']]}")
     print(f"  Confirmed: {c['hits']}/4 frames")
 
-# --- forced detection of 2002 GE56 at known position ---
-print("\nForced detection of 2002 GE56 at known positions...")
 
-ge56_frame1 = np.array([674, 2088])
-step_ge56 = np.array([0, 45])  # approximate step from frame1->2 per SkyBoT
-
-ge56_positions = [ge56_frame1 + step_ge56 * i for i in range(4)]
-ge56_hits = 0
-ge56_dists = []
-for fi, (tree, pred) in enumerate(zip([tree1, tree2, tree3, tree4], ge56_positions)):
-    d, _ = tree.query(pred)
-    ge56_dists.append(d)
-    if d < 20:
-        ge56_hits += 1
-
-print(f"  GE56 frame dists: {[f'{d:.1f}' for d in ge56_dists]}")
-print(f"  Sources found within 20px: {ge56_hits}/4 frames")
 # --- visualize all 4 frames with confirmed candidates ---
 print("\nGenerating visualization...")
 fig, axes = plt.subplots(1, 4, figsize=(20, 6))
