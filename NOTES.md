@@ -62,3 +62,18 @@ SkyBot, a database of known asteroids, to see if each was new or already
 found. Candidate #3 matched a real asteroid within 4 arcseconds, strong proof
 the pipeline works. Candidates #1 and #2 had no match, probably meaning they
 were artifacts rather than real objects.
+
+## Day 19: de-blending
+
+Candidates #1 and #2 were false asteroid detections, so using photutils, 
+I tried de-blending the code to remove any noise that the nearby stars might 
+have caused.
+
+## Day 20-21: figuring out the issue
+
+GE56(near candidate #1) was never a deblending problem. The code was detecting it fine,
+the old bright-star filter was deleting it for being near a star. That old filter rejected 
+everything within 200px of any saturated pixel → killed 23% of the whole image. So I only 
+rejected near the few giant stars (the ones with spikes), zone size scaled to star size. 
+Small stars left alone. I got GE56 but 38 extra candidates, I tweaked certain values and
+got it to 3  actual candidates. The goal get all 7 asteroid to be detected.
