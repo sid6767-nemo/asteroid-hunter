@@ -1,13 +1,8 @@
-# exp_set203_pipeline.py - 4-image asteroid detection pipeline
+# exp_set203_pipeline.py - moving-object detection for ANY number of frames (3+)
 #
-# Run it on the included sample data with no arguments:
-#     python scripts/exp_set203_pipeline.py
-#
-# Or point it at your own data and tweak settings from the terminal:
-#     python scripts/exp_set203_pipeline.py --data data/myfield --threshold 3.5
-#
-# See all options with:
-#     python scripts/exp_set203_pipeline.py --help
+# Run on the sample data:        python scripts/exp_set203_pipeline.py
+# Run on your own folder:        python scripts/exp_set203_pipeline.py --data data/myfield
+# See all options:               python scripts/exp_set203_pipeline.py --help
 
 import os
 import glob
@@ -24,20 +19,19 @@ import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore', message='.*deblending mode.*')
 
-# --- fixed settings (rarely need changing) ---
-PIXEL_SCALE      = 0.256   # arcsec/px
-MIN_MOVE         = 3       # px: ignore sub-pixel jitter between frames
-MAX_MOVE         = 100     # px: ignore absurdly fast matches
-CONFIRM_RADIUS   = 5       # px: how close a prediction must land to count as a hit
-GIANT_AREA_MIN   = 150     # saturated-blob area to count as a spike-making giant star
-GIANT_RADIUS_MIN = 180     # px: smallest giant-star rejection zone
-CV_MAX           = 0.35    # max brightness variation across frames (std/mean)
+PIXEL_SCALE      = 0.256
+MIN_MOVE         = 3
+MAX_MOVE         = 100
+CONFIRM_RADIUS   = 5
+GIANT_AREA_MIN   = 150
+GIANT_RADIUS_MIN = 180
+CV_MAX           = 0.35
+MAX_FRAMES       = 10   # safety cap
 
 
 def get_args():
     p = argparse.ArgumentParser(
-        description="Detect moving asteroids in a set of telescope images.",
-        epilog="Example: python scripts/exp_set203_pipeline.py --data data/set203 --threshold 3.0")
+        description="Detect moving asteroids across a set of telescope frames (3 or more).")
     p.add_argument('--data', default='data/set203',
                    help="folder containing the .fits frames (default: data/set203)")
     p.add_argument('--output', default='outputs',
@@ -45,20 +39,18 @@ def get_args():
     p.add_argument('--threshold', type=float, default=3.0,
                    help="detection threshold in sigma above background (default: 3.0)")
     p.add_argument('--giant-radius-k', type=float, default=10.0,
-                   help="size of rejection zones around bright stars; raise to cut "
-                        "more star junk, lower to keep more sky (default: 10.0)")
-    p.add_argument('--min-frames', type=int, default=4, choices=[3, 4],
-                   help="how many of the 4 frames an object must appear in (default: 4)")
+                   help="size of rejection zones around bright stars (default: 10.0)")
+    p.add_argument('--min-frames', type=int, default=None,
+                   help="how many frames an object must appear in "
+                        "(default: all of them)")
     p.add_argument('--rms-max', type=float, default=1.0,
-                   help="max straight-line fit error in px; lower = stricter (default: 1.0)")
+                   help="max straight-line fit error in px (default: 1.0)")
     p.add_argument('--no-skybot', action='store_true',
-                   help="skip the SkyBoT online cross-match (useful offline)")
+                   help="skip the SkyBoT online cross-match")
     return p.parse_args()
 
 
 def build_wcs(header):
-    """Manual WCS from CRPIX/CDELT/CRVAL/CROTA2 (the header has a bad CROTA1
-    that breaks astropy's automatic WCS, so we build it ourselves)."""
     from astropy.wcs import WCS
     w = WCS(naxis=2)
     w.wcs.crpix = [header['CRPIX1'], header['CRPIX2']]
@@ -80,26 +72,27 @@ def classify(rate):
 
 def main():
     args = get_args()
-    DATA_DIR     = args.data
-    OUTPUT_DIR   = args.output
-    THRESH_SIGMA = args.threshold
-    GIANT_RADIUS_K = args.giant_radius_k
-    MIN_FRAMES   = args.min_frames
-    RMS_MAX      = args.rms_max
-    DO_SKYBOT    = not args.no_skybot
+    DATA_DIR, OUTPUT_DIR = args.data, args.output
+    THRESH_SIGMA, GIANT_RADIUS_K = args.threshold, args.giant_radius_k
+    RMS_MAX, DO_SKYBOT = args.rms_max, not args.no_skybot
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    dataset_name = os.path.basename(os.path.normpath(DATA_DIR))  # e.g. "set203"
+    dataset_name = os.path.basename(os.path.normpath(DATA_DIR))
 
-    # --- load all frames, SORTED BY TIME (not filename) ---
-    pattern = os.path.join(DATA_DIR, '*.fits')
-    files = sorted(glob.glob(pattern),
+    # --- load ALL frames, sorted by time ---
+    files = sorted(glob.glob(os.path.join(DATA_DIR, '*.fits')),
                    key=lambda f: fits.open(f)[0].header['MJD-OBS'])
-    if len(files) < 4:
-        print(f"ERROR: found {len(files)} .fits files in '{DATA_DIR}', need at least 4.")
+    N = len(files)
+    if N < 3:
+        print(f"ERROR: found {N} .fits files in '{DATA_DIR}', need at least 3.")
         return
-    files = files[:4]
-    print(f"Loading {len(files)} frames from '{DATA_DIR}' (chronological order)...")
+    if N > MAX_FRAMES:
+        print(f"Note: found {N} frames, using the first {MAX_FRAMES} by time.")
+        files = files[:MAX_FRAMES]; N = MAX_FRAMES
+
+    MIN_FRAMES = args.min_frames if args.min_frames is not None else N
+    MIN_FRAMES = max(3, min(MIN_FRAMES, N))
+    print(f"Loading {N} frames from '{DATA_DIR}' (chronological order)...")
 
     images, mjds, headers = [], [], []
     for f in files:
@@ -109,47 +102,41 @@ def main():
             headers.append(hdul[0].header)
             print(f"  {os.path.basename(f)[:24]}...  MJD={mjds[-1]:.6f}")
 
-    gaps = [(mjds[i+1] - mjds[i]) * 24 * 60 for i in range(3)]
-    t_days = [mjds[i] - mjds[0] for i in range(4)]
-    print(f"\nTime gaps: {gaps[0]:.1f}, {gaps[1]:.1f}, {gaps[2]:.1f} min")
+    t_days = [mjds[i] - mjds[0] for i in range(N)]
+    gaps_min = [(mjds[i+1]-mjds[i])*24*60 for i in range(N-1)]
+    print(f"\n{N} frames, time gaps (min): " + ", ".join(f"{g:.1f}" for g in gaps_min))
+    print(f"Requiring an object to appear in at least {MIN_FRAMES} of {N} frames.")
 
-    # --- align frames 2,3,4 to frame 1 ---
+    # --- align all frames to frame 0 ---
     print("\nAligning frames to frame 1...")
     aligned = [images[0]]
-    for i in range(1, 4):
+    for i in range(1, N):
         try:
-            registered, _ = aa.register(images[i], images[0], detection_sigma=5)
-            aligned.append(registered)
-            print(f"  Frame {i+1} aligned OK")
+            reg, _ = aa.register(images[i], images[0], detection_sigma=5)
+            aligned.append(reg); print(f"  Frame {i+1} aligned OK")
         except Exception as e:
-            print(f"  Frame {i+1} FAILED: {e}")
-            aligned.append(images[i])
+            print(f"  Frame {i+1} FAILED: {e}"); aligned.append(images[i])
 
-    # --- background, threshold, saturation level (from frame 1) ---
+    # --- background / threshold / saturation (frame 1) ---
     mask0 = (aligned[0] == 0)
     _, ref_median, ref_std = sigma_clipped_stats(aligned[0], sigma=3.0, mask=mask0)
     THRESHOLD = THRESH_SIGMA * ref_std
-    valid_pixels = aligned[0][aligned[0] > 0]
-    img_median = np.median(valid_pixels)
+    img_median = np.median(aligned[0][aligned[0] > 0])
     SATURATION_LEVEL = img_median + 200 * ref_std
-    print(f"\nref_std={ref_std:.1f}  threshold={THRESHOLD:.1f}  saturation={SATURATION_LEVEL:.0f}")
 
-    # --- build rejection zones ONLY around giant (spike-making) stars ---
+    # --- giant-star rejection zones ---
     lbl, nblob = ndimage.label(aligned[0] > SATURATION_LEVEL)
     sizes = ndimage.sum(np.ones_like(lbl), lbl, range(1, nblob + 1))
     giant_zones = []
     for i in range(1, nblob + 1):
-        area = sizes[i - 1]
-        if area >= GIANT_AREA_MIN:
+        if sizes[i-1] >= GIANT_AREA_MIN:
             ys, xs = np.where(lbl == i)
-            radius = max(GIANT_RADIUS_MIN, GIANT_RADIUS_K * np.sqrt(area))
-            giant_zones.append((xs.mean(), ys.mean(), radius))
-    print(f"{len(giant_zones)} giant-star rejection zone(s)")
-
+            giant_zones.append((xs.mean(), ys.mean(),
+                                max(GIANT_RADIUS_MIN, GIANT_RADIUS_K*np.sqrt(sizes[i-1]))))
     def in_giant_zone(x, y):
-        return any(np.hypot(x - cx, y - cy) < r for cx, cy, r in giant_zones)
+        return any(np.hypot(x-cx, y-cy) < r for cx, cy, r in giant_zones)
 
-    # --- detect sources in each aligned frame (keep centroid AND peak) ---
+    # --- detect sources per frame ---
     print("\nDetecting sources (segmentation + deblending)...")
     all_pos, all_peak = [], []
     for i, img in enumerate(aligned):
@@ -158,14 +145,13 @@ def main():
         data = img - median
         segm = detect_sources(data, THRESHOLD, n_pixels=5, mask=mask)
         if segm is None:
-            all_pos.append(np.empty((0, 2))); all_peak.append(np.empty(0))
+            all_pos.append(np.empty((0,2))); all_peak.append(np.empty(0))
             print(f"  Frame {i+1}: 0 sources"); continue
         segm = deblend_sources(data, segm, n_pixels=5, n_levels=32, contrast=0.0001)
         cat = SourceCatalog(data, segm, mask=mask).to_table()
-        pos  = np.array([[float(r['x_centroid']), float(r['y_centroid'])] for r in cat])
-        peak = np.array([float(r['max_value']) for r in cat])
-        all_pos.append(pos); all_peak.append(peak)
-        print(f"  Frame {i+1}: {len(pos)} sources")
+        all_pos.append(np.array([[float(r['x_centroid']), float(r['y_centroid'])] for r in cat]))
+        all_peak.append(np.array([float(r['max_value']) for r in cat]))
+        print(f"  Frame {i+1}: {len(all_pos[-1])} sources")
 
     trees = [KDTree(p) if len(p) else None for p in all_pos]
 
@@ -174,11 +160,8 @@ def main():
         if len(A) == 0 or len(B) == 0: return []
         tA, tB = KDTree(A), KDTree(B)
         df, jf = tB.query(A); _, jb = tA.query(B)
-        out = []
-        for i, (d, j) in enumerate(zip(df, jf)):
-            if MIN_MOVE < d < MAX_MOVE and jb[j] == i:
-                out.append((A[i], B[j], d))
-        return out
+        return [(A[i], B[j], d) for i,(d,j) in enumerate(zip(df,jf))
+                if MIN_MOVE < d < MAX_MOVE and jb[j] == i]
 
     confirmed = []
 
@@ -186,33 +169,30 @@ def main():
         ts = np.array(t_days)
         xs = np.array([p[0] for p in fpos]); ys = np.array([p[1] for p in fpos])
         px = np.polyfit(ts, xs, 1); py = np.polyfit(ts, ys, 1)
-        rms = np.sqrt(np.mean((xs - np.polyval(px, ts))**2 + (ys - np.polyval(py, ts))**2))
+        rms = np.sqrt(np.mean((xs-np.polyval(px,ts))**2 + (ys-np.polyval(py,ts))**2))
         speed = np.hypot(px[0], py[0]) * PIXEL_SCALE
         pk = np.array(fpk); pk = pk[~np.isnan(pk)]
-        cv = (pk.std() / pk.mean()) if len(pk) >= 2 and pk.mean() > 0 else 9.9
+        cv = (pk.std()/pk.mean()) if len(pk) >= 2 and pk.mean() > 0 else 9.9
         return rms, cv, speed
 
-    def line_check_and_add(pairs, start_gap):
+    def line_check_and_add(pairs, start_idx):
+        # start_idx = index of the first frame of the seed pair (step is per-frame)
         for A, B, dist in pairs:
             step = B - A
-            frame_pred = [A - step * start_gap + step * i for i in range(4)]
+            frame_pred = [A + step*(k - start_idx) for k in range(N)]
             fpos, fpk, hits = [], [], 0
-            for fi, (tree, pred) in enumerate(zip(trees, frame_pred)):
-                if tree is None:
+            for fi, pred in enumerate(frame_pred):
+                if trees[fi] is None:
                     fpos.append(pred); fpk.append(np.nan); continue
-                d, idx = tree.query(pred)
+                d, idx = trees[fi].query(pred)
                 if d < CONFIRM_RADIUS:
-                    hits += 1
-                    fpos.append(all_pos[fi][idx])
-                    fpk.append(all_peak[fi][idx])
+                    hits += 1; fpos.append(all_pos[fi][idx]); fpk.append(all_peak[fi][idx])
                 else:
                     fpos.append(pred); fpk.append(np.nan)
-            if hits < 3:
+            if hits < MIN_FRAMES:
                 continue
             f1 = fpos[0]
             if any(in_giant_zone(p[0], p[1]) for p in fpos):
-                continue
-            if hits < MIN_FRAMES:
                 continue
             rms, cv, speed = track_quality(fpos, fpk)
             if rms > RMS_MAX or cv > CV_MAX:
@@ -222,12 +202,11 @@ def main():
             confirmed.append({'f1': f1, 'fpos': fpos, 'fpk': fpk, 'hits': hits,
                               'rate': speed, 'rms': rms, 'cv': cv})
             print(f"  CONFIRMED #{len(confirmed)}: {speed:.0f}\"/day  "
-                  f"({f1[0]:.0f},{f1[1]:.0f})  {hits}/4  RMS={rms:.2f} CV={cv:.2f}")
+                  f"({f1[0]:.0f},{f1[1]:.0f})  {hits}/{N}  RMS={rms:.2f} CV={cv:.2f}")
 
     print("\nLinking + filtering tracks...")
-    line_check_and_add(mutual_pairs(0, 1), 0)
-    line_check_and_add(mutual_pairs(1, 2), 1)
-    line_check_and_add(mutual_pairs(2, 3), 2)
+    for i in range(N - 1):
+        line_check_and_add(mutual_pairs(i, i+1), i)
     print(f"\n{len(confirmed)} confirmed candidate(s) after filtering")
 
     print("\n=== FINAL CONFIRMED CANDIDATES ===")
@@ -235,20 +214,20 @@ def main():
         print(f"\nCandidate #{n+1}")
         print(f"  Speed:     {c['rate']:.0f} arcsec/day  ->  {classify(c['rate'])}")
         print(f"  Frame-1:   ({c['f1'][0]:.0f},{c['f1'][1]:.0f})")
-        print(f"  Quality:   {c['hits']}/4 frames, linRMS={c['rms']:.2f}px, brightnessCV={c['cv']:.2f}")
+        print(f"  Quality:   {c['hits']}/{N} frames, linRMS={c['rms']:.2f}px, brightnessCV={c['cv']:.2f}")
 
-    # --- visualization ---
+    # --- visualization (one panel per frame) ---
     print("\nGenerating visualization...")
-    fig, axes = plt.subplots(1, 4, figsize=(20, 6))
+    fig, axes = plt.subplots(1, N, figsize=(5*N, 6))
+    if N == 1: axes = [axes]
     fig.suptitle(f'Confirmed moving objects: {len(confirmed)}', fontsize=14)
-    colors = ['cyan', 'orange', 'red', 'lime', 'magenta', 'yellow']
-    for frame_idx, (ax, img) in enumerate(zip(axes, aligned)):
+    colors = ['cyan','orange','red','lime','magenta','yellow']
+    for fi, (ax, img) in enumerate(zip(axes, aligned)):
         _, med, std = sigma_clipped_stats(img, sigma=3.0)
         ax.imshow(img, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='upper')
-        ax.set_title(f'Frame {frame_idx+1}')
+        ax.set_title(f'Frame {fi+1}')
         for n, c in enumerate(confirmed):
-            pos = c['fpos'][frame_idx]
-            col = colors[n % len(colors)]
+            pos = c['fpos'][fi]; col = colors[n % len(colors)]
             ax.add_patch(plt.Circle((pos[0], pos[1]), 15, color=col, fill=False, lw=2))
             ax.text(pos[0]+18, pos[1]+18, f'#{n+1}', color=col, fontsize=8, fontweight='bold')
     plt.tight_layout()
@@ -256,35 +235,26 @@ def main():
     plt.savefig(out_png, dpi=150, bbox_inches='tight')
     print(f"Saved {out_png}")
     plt.show()
-    # --- SkyBoT cross-match ---
-    if not DO_SKYBOT:
-        print("\n(SkyBoT cross-match skipped via --no-skybot)")
-        print("\nDone.")
-        return
 
+    if not DO_SKYBOT:
+        print("\n(SkyBoT skipped)\nDone."); return
     from astropy.coordinates import SkyCoord
     from astropy.time import Time
     import astropy.units as u
     try:
         from astroquery.imcce import Skybot
     except Exception:
-        print("\n(astroquery not available - skipping SkyBoT)")
-        print("\nDone.")
-        return
-
-    w = build_wcs(headers[0])
-    epoch = Time(mjds[0], format='mjd')
+        print("\n(astroquery not available)\nDone."); return
+    w = build_wcs(headers[0]); epoch = Time(mjds[0], format='mjd')
     print("\nCross-matching candidates against SkyBoT...")
     for n, c in enumerate(confirmed):
         ra, dec = w.all_pix2world(c['f1'][0], c['f1'][1], 0)
         ra, dec = float(ra), float(dec)
         print(f"\n--- Candidate #{n+1}: RA={ra:.5f} Dec={dec:.5f} ({c['rate']:.0f}\"/day) ---")
         try:
-            res = Skybot.cone_search(SkyCoord(ra=ra, dec=dec, unit='deg'), 0.05*u.deg, epoch)
-            print(res)
+            print(Skybot.cone_search(SkyCoord(ra=ra, dec=dec, unit='deg'), 0.05*u.deg, epoch))
         except Exception as e:
             print(f"  No SkyBoT match / query failed: {e}")
-
     print("\nDone.")
 
 
