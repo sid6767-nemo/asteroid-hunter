@@ -77,3 +77,7 @@ everything within 200px of any saturated pixel → killed 23% of the whole image
 rejected near the few giant stars (the ones with spikes), zone size scaled to star size. 
 Small stars left alone. I got GE56 but 38 extra candidates, I tweaked certain values and
 got it to 3  actual candidates. The goal get all 7 asteroid to be detected.
+
+The objects the pipeline recovers are real main-belt asteroids orbiting between Mars and Jupiter. 
+Example: 2002 GE56, ~6 km across, V=19.16 — recovered cleanly despite sitting next 
+to a saturated star.
