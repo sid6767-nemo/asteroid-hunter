@@ -28,7 +28,7 @@ Run on the IASC **set203** dataset (4 frames, ~21 minutes apart), the pipeline c
 | 2004 RH62 | 745 ″/day | 19.90 |
 | 2002 GE56 | 818 ″/day | 19.16 |
 
-![detected asteroids](outputs/set203_tracks.png)
+![detected asteroids](outputs/set203_named.png)
 
 ## How to run it
 
