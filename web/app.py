@@ -1,39 +1,108 @@
-# app.py - simple two-page web shell for asteroid-hunter
+# app.py - asteroid-hunter web app
 import os
+import re
+import sys
+import uuid
+import glob
 import shutil
+import zipfile
+import subprocess
 from flask import Flask, render_template, request, url_for
 
 app = Flask(__name__)
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, 'static', 'uploads')
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-EXAMPLE_RESULT = os.path.join(PROJECT_ROOT, 'outputs', 'set203_tracks.png')
+PIPELINE     = os.path.join(PROJECT_ROOT, 'scripts', 'exp_set203_pipeline.py')
+UPLOAD_ROOT  = os.path.join(BASE_DIR, 'uploads')
+RESULTS_DIR  = os.path.join(BASE_DIR, 'static', 'results')
+os.makedirs(UPLOAD_ROOT, exist_ok=True)
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+MIN_FRAMES = 3
+MAX_FRAMES = 10
+
 
 @app.route('/')
 def home():
     return render_template('index.html')
 
+
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
-    result_image = None
-    message = None
-    if request.method == 'POST':
-        uploaded = request.files.get('image')
-        if uploaded and uploaded.filename:
-            uploaded.save(os.path.join(UPLOAD_DIR, uploaded.filename))
-        example_dest = os.path.join(BASE_DIR, 'static', 'example_result.png')
-        if os.path.exists(EXAMPLE_RESULT):
-            shutil.copy(EXAMPLE_RESULT, example_dest)
-            result_image = url_for('static', filename='example_result.png')
-            message = ("This is an example detection on the set203 dataset. "
-                       "Running detection on your own upload is coming soon.")
-        else:
-            message = ("Couldn't find the example result image. Run the pipeline "
-                       "once (python scripts/exp_set203_pipeline.py) to generate it.")
-    return render_template('detect.html', result_image=result_image, message=message)
+    if request.method == 'GET':
+        return render_template('detect.html')
+
+    uploads = request.files.getlist('frames')
+    if not uploads or all(not u.filename for u in uploads):
+        return render_template('detect.html', error="Please choose some files first.")
+
+    session_id = uuid.uuid4().hex[:8]
+    work_dir = os.path.join(UPLOAD_ROOT, session_id)
+    os.makedirs(work_dir, exist_ok=True)
+
+    for u in uploads:
+        if not u.filename:
+            continue
+        fname = os.path.basename(u.filename)
+        dest = os.path.join(work_dir, fname)
+        u.save(dest)
+        if fname.lower().endswith('.zip'):
+            try:
+                with zipfile.ZipFile(dest) as z:
+                    z.extractall(work_dir)
+            except Exception:
+                pass
+            os.remove(dest)
+
+    fits_files = glob.glob(os.path.join(work_dir, '**', '*.fits'), recursive=True)
+    n = len(fits_files)
+
+    if n < MIN_FRAMES:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        return render_template('detect.html',
+            error=f"Found {n} FITS frame(s). You need at least {MIN_FRAMES} "
+                  f"(4 or more gives the cleanest results).")
+
+    for f in fits_files:
+        if os.path.dirname(f) != work_dir:
+            shutil.move(f, os.path.join(work_dir, os.path.basename(f)))
+
+    env = dict(os.environ, MPLBACKEND='Agg')
+    try:
+        proc = subprocess.run(
+            [sys.executable, PIPELINE,
+             '--data', work_dir, '--output', RESULTS_DIR, '--no-skybot'],
+            cwd=PROJECT_ROOT, env=env,
+            capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        return render_template('detect.html',
+            error="Detection timed out (took over 5 minutes). Try fewer frames.")
+
+    stdout = proc.stdout or ""
+
+    result_rel = f"results/{session_id}_tracks.png"
+    result_abs = os.path.join(BASE_DIR, 'static', result_rel)
+    result_image = url_for('static', filename=result_rel) if os.path.exists(result_abs) else None
+
+    candidates = re.findall(r'CONFIRMED #\d+: .*', stdout)
+    m = re.search(r'(\d+) confirmed candidate', stdout)
+    count = m.group(1) if m else (str(len(candidates)) if candidates else "0")
+
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    if result_image is None:
+        return render_template('detect.html',
+            error="The pipeline ran but didn't produce a result image. "
+                  "Check that your frames are valid FITS images of the same field.")
+
+    return render_template('detect.html',
+                           result_image=result_image,
+                           candidates=candidates,
+                           count=count,
+                           n_frames=n)
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

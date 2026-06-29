@@ -3,3 +3,5 @@ data/
 __pycache__/
 *.fits
 .DS_Store
+web/uploads/
+web/static/results/
