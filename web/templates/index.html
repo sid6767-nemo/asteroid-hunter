@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asteroid Hunter</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="wrap">
+    <h1>Asteroid Hunter</h1>
+    <p class="tagline">
+      Automatically finds moving asteroids in telescope images.
+      Upload a set of frames and let the pipeline track what moves.
+    </p>
+    <a class="button" href="{{ url_for('detect') }}">Import your image →</a>
+    <p class="note">Built for the IASC asteroid search · by Siddhant</p>
+  </main>
+</body>
+</html>

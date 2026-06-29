@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Detect · Asteroid Hunter</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="wrap">
+    <a class="back" href="{{ url_for('home') }}">← back</a>
+    <h1>Upload your image</h1>
+    <p class="tagline">Choose a telescope image, then run the detector.</p>
+
+    <form method="POST" enctype="multipart/form-data" class="uploader">
+      <input type="file" name="image" accept="image/*,.fits">
+      <button type="submit" class="button">Detect</button>
+    </form>
+
+    {% if message %}
+      <p class="message">{{ message }}</p>
+    {% endif %}
+
+    {% if result_image %}
+      <h2>Result</h2>
+      <img class="result" src="{{ result_image }}" alt="detection result">
+    {% endif %}
+  </main>
+</body>
+</html>
