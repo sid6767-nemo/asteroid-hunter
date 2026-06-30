@@ -26,6 +26,7 @@ CONFIRM_RADIUS   = 5
 GIANT_AREA_MIN   = 150
 GIANT_RADIUS_MIN = 180
 CV_MAX           = 0.35
+ELONG_MAX        = 2.3    # max stretched-ness; rejects diffraction-spike artifacts
 MAX_FRAMES       = 10   # safety cap
 
 
@@ -138,19 +139,20 @@ def main():
 
     # --- detect sources per frame ---
     print("\nDetecting sources (segmentation + deblending)...")
-    all_pos, all_peak = [], []
+    all_pos, all_peak, all_elong = [], [], []
     for i, img in enumerate(aligned):
         mask = (img == 0)
         _, median, _ = sigma_clipped_stats(img, sigma=3.0, mask=mask)
         data = img - median
         segm = detect_sources(data, THRESHOLD, n_pixels=5, mask=mask)
         if segm is None:
-            all_pos.append(np.empty((0,2))); all_peak.append(np.empty(0))
+            all_pos.append(np.empty((0,2))); all_peak.append(np.empty(0)); all_elong.append(np.empty(0))
             print(f"  Frame {i+1}: 0 sources"); continue
         segm = deblend_sources(data, segm, n_pixels=5, n_levels=32, contrast=0.0001)
-        cat = SourceCatalog(data, segm, mask=mask).to_table()
-        all_pos.append(np.array([[float(r['x_centroid']), float(r['y_centroid'])] for r in cat]))
-        all_peak.append(np.array([float(r['max_value']) for r in cat]))
+        cat = SourceCatalog(data, segm, mask=mask)
+        all_pos.append(np.array(list(zip(cat.x_centroid, cat.y_centroid))))
+        all_peak.append(np.array(cat.max_value, dtype=float))
+        all_elong.append(np.array(cat.elongation, dtype=float))
         print(f"  Frame {i+1}: {len(all_pos[-1])} sources")
 
     trees = [KDTree(p) if len(p) else None for p in all_pos]
@@ -180,15 +182,15 @@ def main():
         for A, B, dist in pairs:
             step = B - A
             frame_pred = [A + step*(k - start_idx) for k in range(N)]
-            fpos, fpk, hits = [], [], 0
+            fpos, fpk, fel, hits = [], [], [], 0
             for fi, pred in enumerate(frame_pred):
                 if trees[fi] is None:
-                    fpos.append(pred); fpk.append(np.nan); continue
+                    fpos.append(pred); fpk.append(np.nan); fel.append(np.nan); continue
                 d, idx = trees[fi].query(pred)
                 if d < CONFIRM_RADIUS:
-                    hits += 1; fpos.append(all_pos[fi][idx]); fpk.append(all_peak[fi][idx])
+                    hits += 1; fpos.append(all_pos[fi][idx]); fpk.append(all_peak[fi][idx]); fel.append(all_elong[fi][idx])
                 else:
-                    fpos.append(pred); fpk.append(np.nan)
+                    fpos.append(pred); fpk.append(np.nan); fel.append(np.nan)
             if hits < MIN_FRAMES:
                 continue
             f1 = fpos[0]
@@ -196,6 +198,9 @@ def main():
                 continue
             rms, cv, speed = track_quality(fpos, fpk)
             if rms > RMS_MAX or cv > CV_MAX:
+                continue
+            mean_elong = float(np.nanmean(fel))
+            if mean_elong > ELONG_MAX:      # reject stretched-out spike artifacts
                 continue
             if any(np.hypot(f1[0]-e['f1'][0], f1[1]-e['f1'][1]) < 30 for e in confirmed):
                 continue
