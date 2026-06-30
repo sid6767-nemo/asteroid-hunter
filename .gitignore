@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 web/uploads/
 web/static/results/
+outputs/XY25_p10_tracks.png
