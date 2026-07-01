@@ -27,6 +27,7 @@ GIANT_AREA_MIN   = 150
 GIANT_RADIUS_MIN = 180
 CV_MAX           = 0.35
 ELONG_MAX        = 2.3    # max stretched-ness; rejects diffraction-spike artifacts
+CONC_MIN         = 0.20   # min stack-along-track concentration; rejects halo/galaxy fakes
 MAX_FRAMES       = 10   # safety cap
 
 
@@ -177,6 +178,25 @@ def main():
         cv = (pk.std()/pk.mean()) if len(pk) >= 2 and pk.mean() > 0 else 9.9
         return rms, cv, speed
 
+    def stack_concentration(fpos):
+        # Stack cutouts centered on the tracked position in each frame; measure
+        # how concentrated the light is at the center. Real objects pile up into
+        # a central point (high); halo/galaxy/noise fakes spread out (low).
+        Z = 16; cuts = []
+        for fi in range(N):
+            x, y = int(round(fpos[fi][0])), int(round(fpos[fi][1]))
+            if y-Z < 0 or x-Z < 0 or y+Z > aligned[fi].shape[0] or x+Z > aligned[fi].shape[1]:
+                continue
+            c = aligned[fi][y-Z:y+Z, x-Z:x+Z]
+            _, md, _ = sigma_clipped_stats(c)
+            cuts.append(c - md)
+        if not cuts:
+            return 0.0
+        st = np.clip(np.mean(cuts, axis=0), 0, None)
+        yy, xx = np.mgrid[0:2*Z, 0:2*Z]; r = np.hypot(xx - Z, yy - Z)
+        outer = st[r < 12].sum()
+        return float(st[r < 3].sum() / outer) if outer > 0 else 0.0
+
     def line_check_and_add(pairs, start_idx):
         # start_idx = index of the first frame of the seed pair (step is per-frame)
         for A, B, dist in pairs:
@@ -202,12 +222,15 @@ def main():
             mean_elong = float(np.nanmean(fel))
             if mean_elong > ELONG_MAX:      # reject stretched-out spike artifacts
                 continue
+            conc = stack_concentration(fpos)
+            if conc < CONC_MIN:             # reject halo/galaxy/noise that won't stack to a point
+                continue
             if any(np.hypot(f1[0]-e['f1'][0], f1[1]-e['f1'][1]) < 30 for e in confirmed):
                 continue
             confirmed.append({'f1': f1, 'fpos': fpos, 'fpk': fpk, 'hits': hits,
-                              'rate': speed, 'rms': rms, 'cv': cv})
+                              'rate': speed, 'rms': rms, 'cv': cv, 'conc': conc})
             print(f"  CONFIRMED #{len(confirmed)}: {speed:.0f}\"/day  "
-                  f"({f1[0]:.0f},{f1[1]:.0f})  {hits}/{N}  RMS={rms:.2f} CV={cv:.2f}")
+                  f"({f1[0]:.0f},{f1[1]:.0f})  {hits}/{N}  RMS={rms:.2f} CV={cv:.2f} conc={conc:.2f}")
 
     print("\nLinking + filtering tracks...")
     for i in range(N - 1):
