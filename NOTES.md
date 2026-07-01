@@ -81,3 +81,22 @@ got it to 3  actual candidates. The goal get all 7 asteroid to be detected.
 The objects the pipeline recovers are real main-belt asteroids orbiting between Mars and Jupiter. 
 Example: 2002 GE56, ~6 km across, V=19.16 — recovered cleanly despite sitting next 
 to a saturated star.
+
+## Day 22 — Flask upload page
+I built a Flask upload page that runs the real pipeline on uploaded frames and 
+shows the result image and candidates.
+I wanted a more user-friendly option in case I turn it into a website.
+I tested it on a fresh practice set the pipeline
+had never seen, as a proof-check that it works on new data. I ran into a problem though: 
+some faint real asteroids and false positives were hard to tell apart. That left me stuck.
+
+## Day 23 — Solving false positives with stack-along-track
+I figured out a stack-along-track concentration test to separate faint asteroids from 
+false positives. I stacked cutouts centered on the tracked position across all the frames. 
+A real object piles up into a concentrated point, 
+while a fake smears out. I validated it on a few more datasets and got
+almost all of them right, four out of five correct.
+The one limitation left was false positives from stars sitting
+near the detector's grid lines, which drift slightly between frames.
+I also couldn't fully check for missed asteroids yet,
+since my Astrometrica overlay wasn't working. That's it for now.
