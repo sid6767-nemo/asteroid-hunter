@@ -27,7 +27,9 @@ GIANT_AREA_MIN   = 150
 GIANT_RADIUS_MIN = 180
 CV_MAX           = 0.35
 ELONG_MAX        = 2.3    # max stretched-ness; rejects diffraction-spike artifacts
-CONC_MIN         = 0.20   # min stack-along-track concentration; rejects halo/galaxy fakes
+CONC_MIN         = 0.20   # min concentration for FAINT candidates
+CONC_BRIGHT      = 0.32   # stricter concentration required for BRIGHT candidates
+SNR_BRIGHT       = 15.0   # above this SNR a candidate counts as 'bright'
 MAX_FRAMES       = 10   # safety cap
 
 
@@ -223,7 +225,9 @@ def main():
             if mean_elong > ELONG_MAX:      # reject stretched-out spike artifacts
                 continue
             conc = stack_concentration(fpos)
-            if conc < CONC_MIN:             # reject halo/galaxy/noise that won't stack to a point
+            mean_snr = float(np.nanmean(fpk)) / ref_std
+            conc_needed = CONC_BRIGHT if mean_snr > SNR_BRIGHT else CONC_MIN
+            if conc < conc_needed:          # bright objects must be tightly concentrated; faint get a pass
                 continue
             if any(np.hypot(f1[0]-e['f1'][0], f1[1]-e['f1'][1]) < 30 for e in confirmed):
                 continue
