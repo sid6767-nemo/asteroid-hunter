@@ -51,6 +51,8 @@ def get_args():
                    help="max straight-line fit error in px (default: 1.0)")
     p.add_argument('--no-skybot', action='store_true',
                    help="skip the SkyBoT online cross-match")
+    p.add_argument('--save-frames', action='store_true',
+                   help="also save each aligned frame as its own image (for the web blink viewer)")
     return p.parse_args()
 
 
@@ -79,6 +81,7 @@ def main():
     DATA_DIR, OUTPUT_DIR = args.data, args.output
     THRESH_SIGMA, GIANT_RADIUS_K = args.threshold, args.giant_radius_k
     RMS_MAX, DO_SKYBOT = args.rms_max, not args.no_skybot
+    SAVE_FRAMES = args.save_frames
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     dataset_name = os.path.basename(os.path.normpath(DATA_DIR))
@@ -266,6 +269,25 @@ def main():
     out_png = os.path.join(OUTPUT_DIR, f'{dataset_name}_tracks.png')
     plt.savefig(out_png, dpi=150, bbox_inches='tight')
     print(f"Saved {out_png}")
+
+    # individual aligned frames, all identical size, for the web blink viewer
+    if SAVE_FRAMES:
+        H, W = aligned[0].shape
+        for fi, img in enumerate(aligned):
+            f2 = plt.figure(figsize=(8, 8 * H / W))
+            a2 = f2.add_axes([0, 0, 1, 1])   # axes fill the whole figure -> identical dims
+            _, med, std = sigma_clipped_stats(img, sigma=3.0)
+            a2.imshow(img, cmap='gray', vmin=med-2*std, vmax=med+4*std, origin='upper')
+            a2.axis('off')
+            for n, c in enumerate(confirmed):
+                pos = c['fpos'][fi]; col = colors[n % len(colors)]
+                a2.add_patch(plt.Circle((pos[0], pos[1]), 15, color=col, fill=False, lw=1.8))
+                a2.text(pos[0]+20, pos[1]+20, f'#{n+1}', color=col, fontsize=11, fontweight='bold')
+            a2.set_xlim(0, W); a2.set_ylim(H, 0)
+            f2.savefig(os.path.join(OUTPUT_DIR, f'{dataset_name}_frame{fi+1}.png'), dpi=130)
+            plt.close(f2)
+        print(f"Saved {N} individual frames for the viewer")
+
     plt.show()
 
     if not DO_SKYBOT:

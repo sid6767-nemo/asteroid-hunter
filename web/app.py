@@ -1,4 +1,8 @@
 # app.py - asteroid-hunter web app
+#
+# Run from the project root:   python web/app.py
+# Then open http://127.0.0.1:5000
+
 import os
 import re
 import sys
@@ -57,7 +61,6 @@ def detect():
 
     fits_files = glob.glob(os.path.join(work_dir, '**', '*.fits'), recursive=True)
     n = len(fits_files)
-
     if n < MIN_FRAMES:
         shutil.rmtree(work_dir, ignore_errors=True)
         return render_template('detect.html',
@@ -72,7 +75,8 @@ def detect():
     try:
         proc = subprocess.run(
             [sys.executable, PIPELINE,
-             '--data', work_dir, '--output', RESULTS_DIR, '--no-skybot'],
+             '--data', work_dir, '--output', RESULTS_DIR,
+             '--no-skybot', '--save-frames'],
             cwd=PROJECT_ROOT, env=env,
             capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
@@ -85,6 +89,11 @@ def detect():
     result_rel = f"results/{session_id}_tracks.png"
     result_abs = os.path.join(BASE_DIR, 'static', result_rel)
     result_image = url_for('static', filename=result_rel) if os.path.exists(result_abs) else None
+
+    # individual aligned frames for the blink viewer (sorted frame1, frame2, ...)
+    frame_files = sorted(glob.glob(os.path.join(RESULTS_DIR, f"{session_id}_frame*.png")),
+                         key=lambda p: int(re.search(r'frame(\d+)', p).group(1)))
+    frame_images = [url_for('static', filename=f"results/{os.path.basename(f)}") for f in frame_files]
 
     candidates = re.findall(r'CONFIRMED #\d+: .*', stdout)
     m = re.search(r'(\d+) confirmed candidate', stdout)
@@ -99,6 +108,7 @@ def detect():
 
     return render_template('detect.html',
                            result_image=result_image,
+                           frame_images=frame_images,
                            candidates=candidates,
                            count=count,
                            n_frames=n)
