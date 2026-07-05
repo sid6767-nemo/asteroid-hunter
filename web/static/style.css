@@ -54,6 +54,14 @@ h3 { margin:1.5rem 0 .5rem; font-size:1.1rem; }
 .legend { list-style:none; padding:0; margin:.5rem auto 0; max-width:560px; text-align:left;
   font-size:.85rem; color:var(--muted); line-height:1.6; }
 .legend b { color:var(--fg); }
-/* ---- vertically-centered front page ---- */
-.home { min-height: calc(100vh - 4rem); display:flex; flex-direction:column;
-  align-items:center; justify-content:center; }
+
+/* ---- candidate rows with orbit buttons ---- */
+.candidates li.cand { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; }
+.cand-info { color:#cfe0ff; }
+.named { color:#7ee0a5; font-weight:600; }
+.orbit-btn { background:var(--accent); color:#fff; text-decoration:none; padding:.35rem .7rem;
+  border-radius:7px; font-size:.82rem; font-family:-apple-system,sans-serif; white-space:nowrap; }
+.orbit-btn:hover { opacity:.88; }
+.unknown { color:var(--muted); font-size:.8rem; font-style:italic; }
+
+.all-orbits { display:inline-block; padding:.6rem 1.2rem; font-size:.95rem; }

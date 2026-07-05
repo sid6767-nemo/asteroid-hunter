@@ -251,6 +251,44 @@ def main():
         print(f"  Frame-1:   ({c['f1'][0]:.0f},{c['f1'][1]:.0f})")
         print(f"  Quality:   {c['hits']}/{N} frames, linRMS={c['rms']:.2f}px, brightnessCV={c['cv']:.2f}")
 
+    # --- Stage 1: write sky-coordinate astrometry (time, RA, Dec) per detection ---
+    if confirmed:
+        from astropy.wcs import WCS as _WCS
+        from astropy.time import Time as _Time
+        from astropy.coordinates import SkyCoord as _SkyCoord
+        import astropy.units as _u
+        wq = build_wcs(headers[0])   # frame-0 WCS maps the aligned grid -> sky
+
+        def _mpc_line(desig, mjd, ra_deg, dec_deg, obscode='F51'):
+            t = _Time(mjd, format='mjd')
+            y, mo, d = t.datetime.year, t.datetime.month, t.datetime.day
+            dayfrac = (t.mjd - _Time(f'{y}-{mo:02d}-{d:02d}', format='iso').mjd) + d
+            c = _SkyCoord(ra_deg*_u.deg, dec_deg*_u.deg)
+            ra_hms = c.ra.to_string(unit=_u.hour, sep=' ', precision=2, pad=True)
+            dec_dms = c.dec.to_string(unit=_u.deg, sep=' ', precision=1, alwayssign=True, pad=True)
+            return f"     {desig:<7} C{y} {mo:02d} {dayfrac:08.5f} {ra_hms} {dec_dms}                   {obscode}"
+
+        astro_path = os.path.join(OUTPUT_DIR, f'{dataset_name}_astrometry.txt')
+        with open(astro_path, 'w') as af:
+            af.write(f"# Astrometry for {dataset_name}: sky position of each detection at each frame time\n")
+            af.write(f"# Feed the MPC-format lines to an orbit tool (find_orb / OpenOrb) to fit an orbit.\n\n")
+            for n, c in enumerate(confirmed):
+                desig = f"CAND{n+1:03d}"
+                af.write(f"# Candidate #{n+1}  ({c['rate']:.0f} arcsec/day)\n")
+                af.write(f"#  frame  {'UTC time':23}  {'RA(deg)':>10}  {'Dec(deg)':>10}\n")
+                mpc_lines = []
+                for fi, pos in enumerate(c['fpos']):
+                    ra, dec = wq.all_pix2world(pos[0], pos[1], 0)
+                    ra, dec = float(ra), float(dec)
+                    utc = _Time(mjds[fi], format='mjd').iso
+                    af.write(f"#  {fi+1:<5}  {utc:23}  {ra:10.5f}  {dec:10.5f}\n")
+                    mpc_lines.append(_mpc_line(desig, mjds[fi], ra, dec))
+                af.write("# MPC 80-column observations:\n")
+                for ln in mpc_lines:
+                    af.write(ln + "\n")
+                af.write("\n")
+        print(f"Saved astrometry -> {astro_path}")
+
     # --- visualization (one panel per frame) ---
     print("\nGenerating visualization...")
     fig, axes = plt.subplots(1, N, figsize=(5*N, 6))
@@ -290,26 +328,55 @@ def main():
 
     plt.show()
 
-    if not DO_SKYBOT:
-        print("\n(SkyBoT skipped)\nDone."); return
-    from astropy.coordinates import SkyCoord
-    from astropy.time import Time
-    import astropy.units as u
-    try:
-        from astroquery.imcce import Skybot
-    except Exception:
-        print("\n(astroquery not available)\nDone."); return
-    w = build_wcs(headers[0]); epoch = Time(mjds[0], format='mjd')
-    print("\nCross-matching candidates against SkyBoT...")
+    # --- write a results file (candidate info + SkyBoT name if matched) for the web app ---
+    import json as _json
+    from astropy.coordinates import SkyCoord as _SC
+    from astropy.time import Time as _T
+    import astropy.units as _u2
+    w = build_wcs(headers[0]); epoch = _T(mjds[0], format='mjd')
+    results = []
     for n, c in enumerate(confirmed):
         ra, dec = w.all_pix2world(c['f1'][0], c['f1'][1], 0)
-        ra, dec = float(ra), float(dec)
-        print(f"\n--- Candidate #{n+1}: RA={ra:.5f} Dec={dec:.5f} ({c['rate']:.0f}\"/day) ---")
+        results.append({'id': n+1, 'rate': round(float(c['rate'])),
+                        'x': round(float(c['f1'][0])), 'y': round(float(c['f1'][1])),
+                        'rms': round(float(c['rms']),2), 'cv': round(float(c['cv']),2),
+                        'conc': round(float(c.get('conc',0)),2),
+                        'ra': round(float(ra),5), 'dec': round(float(dec),5),
+                        'name': None, 'sep_arcsec': None})
+
+    if DO_SKYBOT:
         try:
-            print(Skybot.cone_search(SkyCoord(ra=ra, dec=dec, unit='deg'), 0.05*u.deg, epoch))
-        except Exception as e:
-            print(f"  No SkyBoT match / query failed: {e}")
-    print("\nDone.")
+            from astroquery.imcce import Skybot
+        except Exception:
+            Skybot = None
+        if Skybot is not None:
+            print("\nCross-matching candidates against SkyBoT...")
+            for n, c in enumerate(confirmed):
+                ra, dec = results[n]['ra'], results[n]['dec']
+                print(f"\n--- Candidate #{n+1}: RA={ra:.5f} Dec={dec:.5f} ({c['rate']:.0f}\"/day) ---")
+                try:
+                    tbl = Skybot.cone_search(_SC(ra=ra, dec=dec, unit='deg'), 0.05*_u2.deg, epoch)
+                    print(tbl)
+                    if tbl is not None and len(tbl) > 0:
+                        cand = _SC(ra=ra, dec=dec, unit='deg')
+                        # SkyBoT returns matches already sorted by distance; take the nearest
+                        try:
+                            objs = _SC(ra=tbl['RA'], dec=tbl['DEC'])
+                        except Exception:
+                            objs = _SC(ra=tbl['_raj2000'], dec=tbl['_decj2000'])
+                        seps = cand.separation(objs).arcsec
+                        import numpy as _np
+                        best_i = int(_np.argmin(seps)); best_sep = float(seps[best_i])
+                        if best_sep < 15:
+                            results[n]['name'] = str(tbl['Name'][best_i]).strip()
+                            results[n]['sep_arcsec'] = round(best_sep,1)
+                except Exception as e:
+                    print(f"  No SkyBoT match / query failed: {e}")
+
+    with open(os.path.join(OUTPUT_DIR, f'{dataset_name}_results.json'), 'w') as jf:
+        _json.dump(results, jf)
+    print(f"\nSaved results -> {os.path.join(OUTPUT_DIR, dataset_name + '_results.json')}")
+    print("Done.")
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@
 import os
 import re
 import sys
+import json
 import uuid
 import glob
 import shutil
@@ -71,33 +72,37 @@ def detect():
         if os.path.dirname(f) != work_dir:
             shutil.move(f, os.path.join(work_dir, os.path.basename(f)))
 
+    # run the pipeline WITH SkyBoT so it can identify known asteroids (needed for orbit lookup)
     env = dict(os.environ, MPLBACKEND='Agg')
     try:
         proc = subprocess.run(
             [sys.executable, PIPELINE,
-             '--data', work_dir, '--output', RESULTS_DIR,
-             '--no-skybot', '--save-frames'],
+             '--data', work_dir, '--output', RESULTS_DIR, '--save-frames'],
             cwd=PROJECT_ROOT, env=env,
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, timeout=420)
     except subprocess.TimeoutExpired:
         shutil.rmtree(work_dir, ignore_errors=True)
         return render_template('detect.html',
-            error="Detection timed out (took over 5 minutes). Try fewer frames.")
-
-    stdout = proc.stdout or ""
+            error="Detection timed out. Try fewer frames, or the catalog lookup may be slow.")
 
     result_rel = f"results/{session_id}_tracks.png"
     result_abs = os.path.join(BASE_DIR, 'static', result_rel)
     result_image = url_for('static', filename=result_rel) if os.path.exists(result_abs) else None
 
-    # individual aligned frames for the blink viewer (sorted frame1, frame2, ...)
     frame_files = sorted(glob.glob(os.path.join(RESULTS_DIR, f"{session_id}_frame*.png")),
                          key=lambda p: int(re.search(r'frame(\d+)', p).group(1)))
     frame_images = [url_for('static', filename=f"results/{os.path.basename(f)}") for f in frame_files]
 
-    candidates = re.findall(r'CONFIRMED #\d+: .*', stdout)
-    m = re.search(r'(\d+) confirmed candidate', stdout)
-    count = m.group(1) if m else (str(len(candidates)) if candidates else "0")
+    # structured candidate list (with SkyBoT names) from the pipeline's results file
+    results_path = os.path.join(RESULTS_DIR, f"{session_id}_results.json")
+    candidates = []
+    if os.path.exists(results_path):
+        try:
+            with open(results_path) as jf:
+                candidates = json.load(jf)
+        except Exception:
+            candidates = []
+    count = str(len(candidates))
 
     shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -112,6 +117,49 @@ def detect():
                            candidates=candidates,
                            count=count,
                            n_frames=n)
+
+
+def _fetch_elements(name):
+    from astroquery.jplhorizons import Horizons
+    from astropy.time import Time
+    el = Horizons(id=name, location='@sun', epochs=Time.now().jd).elements()
+    return {'a': float(el['a'][0]),   'e':  float(el['e'][0]),
+            'i': float(el['incl'][0]),'Om': float(el['Omega'][0]),
+            'w': float(el['w'][0]),   'M':  float(el['M'][0])}
+
+
+@app.route('/orbit')
+def orbit():
+    name = (request.args.get('name') or '').strip()
+    if not name:
+        return render_template('orbit.html', asteroids=None, title=None,
+                               error="No asteroid was specified.")
+    try:
+        asteroids = [{'name': name, 'el': _fetch_elements(name)}]
+        return render_template('orbit.html', asteroids=asteroids,
+                               title=f"Orbit of {name}", error=None)
+    except Exception as e:
+        return render_template('orbit.html', asteroids=None, title=None,
+                               error=f"Couldn't fetch an orbit for '{name}'. ({e})")
+
+
+@app.route('/orbits')
+def orbits():
+    names = [x.strip() for x in (request.args.get('names') or '').split(',') if x.strip()]
+    if not names:
+        return render_template('orbit.html', asteroids=None, title=None,
+                               error="No asteroids were specified.")
+    asteroids = []
+    for nm in names:
+        try:
+            asteroids.append({'name': nm, 'el': _fetch_elements(nm)})
+        except Exception:
+            pass
+    if not asteroids:
+        return render_template('orbit.html', asteroids=None, title=None,
+                               error="Couldn't fetch orbits for those asteroids.")
+    return render_template('orbit.html', asteroids=asteroids,
+                           title="All detected asteroid orbits", error=None)
 
 
 if __name__ == '__main__':
