@@ -100,3 +100,23 @@ The one limitation left was false positives from stars sitting
 near the detector's grid lines, which drift slightly between frames.
 I also couldn't fully check for missed asteroids yet,
 since my Astrometrica overlay wasn't working. That's it for now.
+
+## Day 24 — Orbit determination, Stage 1
+I started the orbit goal in stages. Stage 1 makes the pipeline
+output each asteroid's real sky position (RA/Dec) at each frame's
+exact time, and also in the standard MPC format that orbit tools read.
+Validated on set203: the positions match the catalog within ~4 arcsec.
+I learned that a single night's short arc can't determine a real
+orbit, so I use known orbits from JPL Horizons for the visualization.
+
+## Day 25 — 3D orbit viewer in the web app
+I built a 3D orbit viewer with Three.js showing the asteroid's real
+orbit around the Sun with Earth, animated over time with speed and
+zoom controls and a rich star and nebula background.
+I wired it into the Flask app: the pipeline now identifies detected
+asteroids via SkyBoT, and each named one gets a View orbit button
+that fetches its real orbit from JPL Horizons.
+There is also a View all orbits together button that shows every
+detected asteroid's orbit on one shared map.
+
+
