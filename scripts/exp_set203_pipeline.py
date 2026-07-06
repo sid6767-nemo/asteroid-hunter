@@ -289,6 +289,44 @@ def main():
                 af.write("\n")
         print(f"Saved astrometry -> {astro_path}")
 
+    # --- Sonification: sound-field (from real tracks) + backdrop image for the web "Listen" mode ---
+    if confirmed:
+        try:
+            from scipy.spatial import KDTree as _KDTree
+            from scipy.ndimage import gaussian_filter as _gf
+            from PIL import Image as _Image
+            H0, W0 = aligned[0].shape
+            NW = 700; _scale = NW / W0; NH = int(H0 * _scale)
+
+            # every track point (each mover's position in each frame)
+            tpts = []
+            for c in confirmed:
+                for p in c['fpos']:
+                    tpts.append([float(p[0]), float(p[1])])
+            tpts = np.array(tpts)
+
+            ys, xs = np.mgrid[0:NH, 0:NW]
+            gx = xs / _scale; gy = ys / _scale
+            dist, _ = _KDTree(tpts).query(np.column_stack([gx.ravel(), gy.ravel()]))
+            dist = dist.reshape(NH, NW)
+            R = 120.0                                   # guidance radius (full-res px)
+            field = np.clip(1 - dist / R, 0, 1) ** 2
+            _Image.fromarray((field * 255).astype(np.uint8)).save(
+                os.path.join(OUTPUT_DIR, f'{dataset_name}_soundfield.png'))
+
+            # backdrop: stretched frame-1 so a sighted tester can also see the field
+            ref0 = aligned[0]
+            m0 = (ref0 == 0)
+            from astropy.stats import sigma_clipped_stats as _scs
+            _, med0, sd0 = _scs(ref0, sigma=3.0, mask=m0)
+            disp = np.arcsinh(np.clip((ref0 - med0) / (sd0 * 4 if sd0 > 0 else 1), 0, None))
+            disp = np.clip(disp / np.percentile(disp, 99.6), 0, 1)
+            _Image.fromarray((disp * 255).astype(np.uint8)).resize((NW, NH)).save(
+                os.path.join(OUTPUT_DIR, f'{dataset_name}_backdrop.jpg'), quality=72)
+            print(f"Saved sonification -> {dataset_name}_soundfield.png + _backdrop.jpg")
+        except Exception as _e:
+            print(f"  (sonification skipped: {_e})")
+
     # --- visualization (one panel per frame) ---
     print("\nGenerating visualization...")
     fig, axes = plt.subplots(1, N, figsize=(5*N, 6))
@@ -359,17 +397,17 @@ def main():
                     print(tbl)
                     if tbl is not None and len(tbl) > 0:
                         cand = _SC(ra=ra, dec=dec, unit='deg')
-                        # SkyBoT returns matches already sorted by distance; take the nearest
-                        try:
-                            objs = _SC(ra=tbl['RA'], dec=tbl['DEC'])
-                        except Exception:
-                            objs = _SC(ra=tbl['_raj2000'], dec=tbl['_decj2000'])
-                        seps = cand.separation(objs).arcsec
-                        import numpy as _np
-                        best_i = int(_np.argmin(seps)); best_sep = float(seps[best_i])
-                        if best_sep < 15:
+                        best_i, best_sep = 0, 1e9
+                        for i in range(len(tbl)):
+                            try:
+                                o = _SC(ra=float(tbl['RA'][i]), dec=float(tbl['DEC'][i]), unit='deg')
+                            except Exception:
+                                o = _SC(ra=float(tbl['_raj2000'][i]), dec=float(tbl['_decj2000'][i]), unit='deg')
+                            sep = cand.separation(o).arcsec
+                            if sep < best_sep: best_sep, best_i = sep, i
+                        if best_sep < 10:
                             results[n]['name'] = str(tbl['Name'][best_i]).strip()
-                            results[n]['sep_arcsec'] = round(best_sep,1)
+                            results[n]['sep_arcsec'] = round(float(best_sep),1)
                 except Exception as e:
                     print(f"  No SkyBoT match / query failed: {e}")
 

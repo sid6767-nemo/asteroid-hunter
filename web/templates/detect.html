@@ -133,6 +133,64 @@
       </script>
       {% endif %}
 
+      {% if soundfield_url and backdrop_url %}
+      <h3 class="strip-title">&#128266; Listen &mdash; find them by ear</h3>
+      <p class="hint">For blind and low-vision users: move your cursor over the sky. The sound gets louder and higher as you approach a real asteroid, and peaks when you land on it. Empty sky is silent.</p>
+      <div style="text-align:center">
+        <button id="sonarStart" class="orbit-btn">Click to start listening</button>
+        <div id="sonarStatus" style="height:1.4rem;font-weight:600;margin:.4rem;color:#ffd24d"></div>
+        <div id="sonarMeter" style="height:14px;width:560px;max-width:92%;margin:.5rem auto;background:#111a2e;border-radius:8px;overflow:hidden">
+          <div id="sonarBar" style="height:100%;width:0;background:linear-gradient(90deg,#3987e5,#ffd24d,#ff5c5c)"></div>
+        </div>
+        <div id="sonarWrap" style="position:relative;display:inline-block;cursor:crosshair">
+          <img id="sonarSky" src="{{ backdrop_url }}" alt="sky region to scan by ear" style="width:560px;max-width:92vw;border-radius:10px;border:1px solid #223">
+          <div id="sonarCursor" style="position:absolute;width:24px;height:24px;border:2px solid #fff;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;opacity:.7;box-shadow:0 0 10px #fff;left:-50px;top:-50px"></div>
+        </div>
+      </div>
+      <canvas id="sonarField" style="display:none"></canvas>
+      <script>
+      (function(){
+        const startBtn=document.getElementById('sonarStart');
+        if(!startBtn) return;
+        const cv=document.getElementById('sonarField'), fx=cv.getContext('2d',{willReadFrequently:true});
+        const fieldImg=new Image();
+        fieldImg.onload=()=>{cv.width=fieldImg.naturalWidth;cv.height=fieldImg.naturalHeight;fx.drawImage(fieldImg,0,0);};
+        fieldImg.src="{{ soundfield_url }}";
+        const sky=document.getElementById('sonarSky'), cursor=document.getElementById('sonarCursor');
+        const bar=document.getElementById('sonarBar'), status=document.getElementById('sonarStatus');
+        let ac,osc,gain,started=false,target=0,cur=0;
+        startBtn.onclick=()=>{
+          if(started)return; started=true;
+          ac=new (window.AudioContext||window.webkitAudioContext)();
+          osc=ac.createOscillator(); gain=ac.createGain();
+          osc.type='sine'; osc.frequency.value=220; gain.gain.value=0;
+          osc.connect(gain); gain.connect(ac.destination); osc.start();
+          startBtn.textContent='Listening \u2014 move over the sky'; loop();
+        };
+        function sample(e){
+          const r=sky.getBoundingClientRect();
+          const rx=(e.clientX-r.left)/r.width, ry=(e.clientY-r.top)/r.height;
+          if(rx<0||rx>1||ry<0||ry>1){target=0;return;}
+          cursor.style.left=(e.clientX-r.left)+'px'; cursor.style.top=(e.clientY-r.top)+'px';
+          if(!cv.width) return;
+          const px=Math.floor(rx*cv.width), py=Math.floor(ry*cv.height);
+          target=fx.getImageData(px,py,1,1).data[0]/255;
+        }
+        sky.addEventListener('pointermove',sample);
+        sky.addEventListener('pointerleave',()=>{target=0;});
+        function loop(){
+          requestAnimationFrame(loop);
+          cur+=(target-cur)*0.25;
+          const t=ac.currentTime, pulseRate=2+cur*10, pulse=0.65+0.35*Math.sin(t*pulseRate*6.28);
+          gain.gain.setTargetAtTime(cur*cur*0.35*(cur>0.05?pulse:1),t,0.03);
+          osc.frequency.setTargetAtTime(220+cur*660,t,0.03);
+          bar.style.width=(cur*100)+'%';
+          status.textContent = cur>0.85?'\ud83d\udd34 ON AN ASTEROID!' : cur>0.4?'warmer\u2026' : cur>0.12?'faint signal\u2026':'';
+        }
+      })();
+      </script>
+
+      {% endif %}
       {% set named = candidates|selectattr('name')|list %}
       {% if named|length >= 1 %}
         <div style="text-align:center;margin:1.2rem 0;">

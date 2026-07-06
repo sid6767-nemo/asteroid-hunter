@@ -104,6 +104,11 @@ def detect():
             candidates = []
     count = str(len(candidates))
 
+    sf_rel = f"results/{session_id}_soundfield.png"
+    bd_rel = f"results/{session_id}_backdrop.jpg"
+    soundfield_url = url_for('static', filename=sf_rel) if os.path.exists(os.path.join(BASE_DIR,'static',sf_rel)) else None
+    backdrop_url   = url_for('static', filename=bd_rel) if os.path.exists(os.path.join(BASE_DIR,'static',bd_rel)) else None
+
     shutil.rmtree(work_dir, ignore_errors=True)
 
     if result_image is None:
@@ -116,7 +121,9 @@ def detect():
                            frame_images=frame_images,
                            candidates=candidates,
                            count=count,
-                           n_frames=n)
+                           n_frames=n,
+                           soundfield_url=soundfield_url,
+                           backdrop_url=backdrop_url)
 
 
 def _fetch_elements(name):
