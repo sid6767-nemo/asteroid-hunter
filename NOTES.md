@@ -119,4 +119,13 @@ that fetches its real orbit from JPL Horizons.
 There is also a View all orbits together button that shows every
 detected asteroid's orbit on one shared map.
 
-
+## Day 26 - Sonification for accessibility
+I built a way to find asteroids by ear, for blind and people with poor vision.
+You move a cursor over the sky and the sound gets louder and higher as
+you near a real asteroid, and peaks when you land on it.
+I tried a asteroid detection version first but it drowned faint asteroids
+in star noise, so I built the sound-field from the real detections,
+which is reliable.
+It is embedded below the blink viewer in the web app.
+Two things to fix next: the readings are uneven from different sides,
+and I want it to speak the asteroid's name and coordinates out loud.
