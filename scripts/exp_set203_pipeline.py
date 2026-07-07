@@ -397,17 +397,17 @@ def main():
                     print(tbl)
                     if tbl is not None and len(tbl) > 0:
                         cand = _SC(ra=ra, dec=dec, unit='deg')
-                        best_i, best_sep = 0, 1e9
-                        for i in range(len(tbl)):
-                            try:
-                                o = _SC(ra=float(tbl['RA'][i]), dec=float(tbl['DEC'][i]), unit='deg')
-                            except Exception:
-                                o = _SC(ra=float(tbl['_raj2000'][i]), dec=float(tbl['_decj2000'][i]), unit='deg')
-                            sep = cand.separation(o).arcsec
-                            if sep < best_sep: best_sep, best_i = sep, i
-                        if best_sep < 10:
+                        # SkyBoT returns matches already sorted by distance; take the nearest
+                        try:
+                            objs = _SC(ra=tbl['RA'], dec=tbl['DEC'])
+                        except Exception:
+                            objs = _SC(ra=tbl['_raj2000'], dec=tbl['_decj2000'])
+                        seps = cand.separation(objs).arcsec
+                        import numpy as _np2
+                        best_i = int(_np2.argmin(seps)); best_sep = float(seps[best_i])
+                        if best_sep < 15:
                             results[n]['name'] = str(tbl['Name'][best_i]).strip()
-                            results[n]['sep_arcsec'] = round(float(best_sep),1)
+                            results[n]['sep_arcsec'] = round(best_sep,1)
                 except Exception as e:
                     print(f"  No SkyBoT match / query failed: {e}")
 
