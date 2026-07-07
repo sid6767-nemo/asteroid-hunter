@@ -298,19 +298,14 @@ def main():
             H0, W0 = aligned[0].shape
             NW = 700; _scale = NW / W0; NH = int(H0 * _scale)
 
-            # every track point (each mover's position in each frame)
-            tpts = []
-            for c in confirmed:
-                for p in c['fpos']:
-                    tpts.append([float(p[0]), float(p[1])])
-            tpts = np.array(tpts)
-
-            ys, xs = np.mgrid[0:NH, 0:NW]
-            gx = xs / _scale; gy = ys / _scale
-            dist, _ = _KDTree(tpts).query(np.column_stack([gx.ravel(), gy.ravel()]))
-            dist = dist.reshape(NH, NW)
-            R = 120.0                                   # guidance radius (full-res px)
-            field = np.clip(1 - dist / R, 0, 1) ** 2
+            # one beacon per asteroid = center of its track; smooth radial glow.
+            # radially symmetric, so the reading is consistent from every approach direction.
+            centers = np.array([np.array(c['fpos'])[0] for c in confirmed]) * _scale   # frame-1 position (matches the backdrop image)
+            ys, xs = np.mgrid[0:NH, 0:NW].astype(float)
+            R = 90.0                                    # reach in display px
+            field = np.zeros((NH, NW))
+            for cx, cy in centers:
+                field = np.maximum(field, np.exp(-((xs-cx)**2 + (ys-cy)**2) / (2*(R/2.5)**2)))
             _Image.fromarray((field * 255).astype(np.uint8)).save(
                 os.path.join(OUTPUT_DIR, f'{dataset_name}_soundfield.png'))
 
