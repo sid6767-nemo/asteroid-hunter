@@ -6,3 +6,10 @@ __pycache__/
 web/uploads/
 web/static/results/
 outputs/
+# generated pipeline outputs
+outputs/
+textures/
+web/uploads/
+web/static/results/
+__pycache__/
+*.pyc

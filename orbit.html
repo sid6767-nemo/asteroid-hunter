@@ -1,0 +1,205 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><style>body{margin:0;overflow:hidden;background:#000}
+#ui{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:16px;align-items:center;color:#fff;font-family:sans-serif;background:rgba(0,0,0,.55);padding:10px 18px;border-radius:12px;flex-wrap:wrap;justify-content:center;max-width:94vw}
+#ui button{background:#2a2f45;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer}
+#ui .grp{display:flex;flex-direction:column;align-items:center;font-size:11px;color:#9fb0d0;gap:2px}
+#ui .row{display:flex;align-items:center;gap:6px}
+#ui input[type=range]{width:150px}
+#dateLbl{min-width:90px;font-size:13px;color:#cfe0ff}</style></head>
+<body>
+<div id="ui">
+  <button id="playBtn">Pause</button>
+  <div class="grp">Time <input id="timeSlider" type="range" min="0" max="6000" value="0"></div>
+  <span id="dateLbl">Day 0</span>
+  <div class="grp">Orbit speed <input id="speedSlider" type="range" min="0" max="40" value="6"></div>
+  <div class="grp">Zoom <div class="row"><span>&minus;</span><input id="zoomSlider" type="range" min="15" max="2000" value="1255"><span>+</span></div></div>
+  <button id="resetBtn">Reset</button>
+</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const deg = d => d * Math.PI / 180;
+function orient(v,iD,OmD,wD){const i=deg(iD),Om=deg(OmD),w=deg(wD);
+  let x=v.x*Math.cos(w)-v.y*Math.sin(w),y=v.x*Math.sin(w)+v.y*Math.cos(w),z=v.z;
+  let y2=y*Math.cos(i)-z*Math.sin(i),z2=y*Math.sin(i)+z*Math.cos(i);y=y2;z=z2;
+  return{x:x*Math.cos(Om)-y*Math.sin(Om),y:x*Math.sin(Om)+y*Math.cos(Om),z:z};}
+function orbitPath(el,n=360){const p=[];for(let k=0;k<n;k++){const th=2*Math.PI*k/(n-1);
+  const r=el.a*(1-el.e*el.e)/(1+el.e*Math.cos(th));
+  p.push(orient({x:r*Math.cos(th),y:r*Math.sin(th),z:0},el.i,el.Om,el.w));}return p;}
+function positionAt(el,days){
+  const period=365.25*Math.pow(el.a,1.5);
+  const M=deg(el.M)+2*Math.PI*(days/period);
+  let E=M;for(let j=0;j<50;j++)E=E-(E-el.e*Math.sin(E)-M)/(1-el.e*Math.cos(E));
+  const th=2*Math.atan2(Math.sqrt(1+el.e)*Math.sin(E/2),Math.sqrt(1-el.e)*Math.cos(E/2));
+  const r=el.a*(1-el.e*el.e)/(1+el.e*Math.cos(th));
+  return orient({x:r*Math.cos(th),y:r*Math.sin(th),z:0},el.i,el.Om,el.w);}
+const GE56={a:3.16,e:0.144,i:10.15,Om:347.29,w:156.71,M:17.22};
+const EARTH={a:1.0,e:0.0167,i:0,Om:0,w:0,M:0};
+
+const AU=100;
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x050a24);
+const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.5,40000);
+camera.position.set(0,380,620);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.08;
+controls.zoomSpeed=2.5; controls.minDistance=15; controls.maxDistance=6000;
+const toScene=p=>new THREE.Vector3(p.x*AU,p.z*AU,p.y*AU);
+
+function radialTex(r,g,b,soft){
+  const c=document.createElement('canvas');c.width=c.height=256;const x=c.getContext('2d');
+  const grd=x.createRadialGradient(128,128,0,128,128,128);
+  grd.addColorStop(0,`rgba(${r},${g},${b},1)`);
+  grd.addColorStop(soft?0.5:0.25,`rgba(${r},${g},${b},${soft?0.45:0.5})`);
+  grd.addColorStop(1,`rgba(${r},${g},${b},0)`);
+  x.fillStyle=grd;x.fillRect(0,0,256,256);return new THREE.CanvasTexture(c);
+}
+function streakTex(r,g,b){
+  const c=document.createElement('canvas');c.width=512;c.height=128;const x=c.getContext('2d');
+  const grd=x.createRadialGradient(256,64,0,256,64,256);
+  grd.addColorStop(0,`rgba(${r},${g},${b},0.9)`);
+  grd.addColorStop(0.4,`rgba(${r},${g},${b},0.35)`);
+  grd.addColorStop(1,`rgba(${r},${g},${b},0)`);
+  x.fillStyle=grd;x.beginPath();x.ellipse(256,64,256,60,0,0,7);x.fill();
+  x.fillStyle='rgba(255,255,255,0.8)';
+  for(let i=0;i<200;i++){x.fillRect(60+Math.random()*392,44+Math.random()*40,1.2,1.2);}
+  return new THREE.CanvasTexture(c);
+}
+
+const skyGroup=new THREE.Group(); scene.add(skyGroup);
+function starLayer(N,size,rad){
+  const pos=[],col=[];
+  for(let i=0;i<N;i++){
+    const r=rad+Math.random()*2500,u=Math.random()*2-1,t=Math.random()*Math.PI*2,s=Math.sqrt(1-u*u);
+    pos.push(r*s*Math.cos(t),r*u,r*s*Math.sin(t));
+    const w=0.5+Math.random()*0.5,k=Math.random();
+    if(k<0.55)col.push(0.5*w,0.66*w,w);
+    else if(k<0.82)col.push(0.68*w,0.55*w,w);
+    else if(k<0.92)col.push(0.9*w,0.85*w,w);
+    else col.push(w,0.82*w,0.6*w);
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('color',new THREE.Float32BufferAttribute(col,3));
+  skyGroup.add(new THREE.Points(g,new THREE.PointsMaterial({size,sizeAttenuation:false,vertexColors:true,transparent:true,opacity:0.95})));
+}
+starLayer(6000,1.5,5000); starLayer(4000,2.2,6000); starLayer(2000,3,7000);
+
+const starGlow=radialTex(200,215,255,true);
+for(let i=0;i<90;i++){
+  const r=5200+Math.random()*2500,u=Math.random()*2-1,t=Math.random()*Math.PI*2,s=Math.sqrt(1-u*u);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:starGlow,transparent:true,opacity:0.55+Math.random()*0.45,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const sc=45+Math.random()*100; sp.scale.set(sc,sc,1);
+  sp.position.set(r*s*Math.cos(t),r*u,r*s*Math.sin(t)); skyGroup.add(sp);
+}
+
+function nebula(tx,scale,x,y,z,op){const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tx,transparent:true,opacity:op,blending:THREE.AdditiveBlending,depthWrite:false}));s.scale.set(scale,scale,1);s.position.set(x,y,z);skyGroup.add(s);}
+const nBlu=radialTex(60,130,255,true),nCyan=radialTex(40,180,230,true),nPur=radialTex(140,70,230,true),nMag=radialTex(190,80,220,true);
+const clouds=[
+[nBlu,6200,-3400,1500,-4200,.85],[nBlu,7000,3900,-800,-3800,.8],[nCyan,5400,-2400,-1900,4100,.7],
+[nPur,6000,3600,2100,3400,.7],[nBlu,5200,-4200,-500,2200,.75],[nCyan,5600,1200,2600,-4300,.7],
+[nPur,5000,-1200,-2600,-3900,.65],[nMag,5200,4300,-1800,900,.6],[nBlu,4600,-3800,2400,-1200,.7],
+[nPur,6400,600,-2800,4200,.65],[nCyan,4800,2600,-3400,-1800,.6],[nMag,4400,-3000,-2200,-2600,.55]];
+for(const c of clouds) nebula(c[0],c[1],c[2],c[3],c[4],c[5]);
+
+
+
+scene.add(new THREE.PointLight(0xffffff,2.6,0,0));
+scene.add(new THREE.AmbientLight(0xffffff,0.55));
+
+const sun=new THREE.Mesh(new THREE.SphereGeometry(20,48,48),new THREE.MeshBasicMaterial({color:0xffd070}));
+scene.add(sun);
+function glowSprite(tx,scale,op){const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tx,transparent:true,opacity:op,blending:THREE.AdditiveBlending,depthWrite:false}));s.scale.set(scale,scale,1);scene.add(s);return s;}
+glowSprite(radialTex(255,180,60),120,0.95);
+glowSprite(radialTex(255,120,30),200,0.55);
+glowSprite(radialTex(255,90,20),320,0.30);
+
+function drawOrbit(el,color){const pts=orbitPath(el).map(toScene);
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color,transparent:true,opacity:0.65})));}
+drawOrbit(EARTH,0x4a9eff);drawOrbit(GE56,0xff9a33);
+
+function earthTexture(){
+  const c=document.createElement('canvas');c.width=256;c.height=128;const x=c.getContext('2d');
+  x.fillStyle='#1b66c9';x.fillRect(0,0,256,128);x.fillStyle='#2f9e44';
+  const blobs=[[40,60,26],[70,45,18],[120,80,30],[160,50,22],[200,70,28],[220,95,18],[95,100,16]];
+  for(const b of blobs){x.beginPath();x.ellipse(b[0],b[1],b[2],b[2]*0.7,0,0,7);x.fill();}
+  x.fillStyle='#eef3f7';x.beginPath();x.ellipse(128,10,120,12,0,0,7);x.fill();x.beginPath();x.ellipse(128,120,120,12,0,0,7);x.fill();
+  return new THREE.CanvasTexture(c);
+}
+const earthBody=new THREE.Mesh(new THREE.SphereGeometry(7,48,48),new THREE.MeshStandardMaterial({map:earthTexture(),roughness:0.85,metalness:0}));
+scene.add(earthBody);
+const earthAtm=new THREE.Mesh(new THREE.SphereGeometry(8.1,48,48),new THREE.MeshBasicMaterial({color:0x66aaff,transparent:true,opacity:0.25,side:THREE.BackSide,blending:THREE.AdditiveBlending,depthWrite:false}));
+earthBody.add(earthAtm);
+
+const astGeo=new THREE.IcosahedronGeometry(6,4);
+const apos=astGeo.attributes.position; const vv=new THREE.Vector3();
+// a few smooth 3D bumps (outward only) so it stays a solid, lumpy rock
+const bumps=[]; for(let b=0;b<7;b++){bumps.push(new THREE.Vector3(Math.random()*2-1,Math.random()*2-1,Math.random()*2-1).normalize());}
+for(let k=0;k<apos.count;k++){
+  vv.fromBufferAttribute(apos,k); const dir=vv.clone().normalize();
+  let bump=0; for(const b of bumps){bump+=Math.max(0,dir.dot(b))**2;}
+  const fine=(Math.sin(dir.x*9)*Math.cos(dir.y*11)+Math.sin(dir.z*13))*0.05; // small surface texture
+  const scale=6*(0.9+0.18*bump+fine);   // always >= ~0.9*R, never inward -> solid
+  vv.setLength(scale); apos.setXYZ(k,vv.x,vv.y,vv.z);
+}
+astGeo.computeVertexNormals();
+const ge56Body=new THREE.Mesh(astGeo,new THREE.MeshStandardMaterial({color:0x8f867b,roughness:1,metalness:0,flatShading:false}));
+scene.add(ge56Body);
+
+function makeLabel(text,color){const c=document.createElement('canvas');c.width=256;c.height=64;const g=c.getContext('2d');
+  g.font='bold 30px sans-serif';g.fillStyle=color;g.textAlign='center';g.textBaseline='middle';g.fillText(text,128,32);
+  const t=new THREE.CanvasTexture(c);const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false}));spr.scale.set(88,22,1);return spr;}
+const sunLabel=makeLabel('Sun','#ffd873');sunLabel.position.set(0,42,0);scene.add(sunLabel);
+const earthLbl=makeLabel('Earth','#8ec5ff');scene.add(earthLbl);
+const ge56Lbl=makeLabel('GE56','#ffc48a');scene.add(ge56Lbl);
+
+let day=0,playing=true,SPEED=6;
+const slider=document.getElementById('timeSlider');
+const speedSlider=document.getElementById('speedSlider');
+const zoomSlider=document.getElementById('zoomSlider');
+const playBtn=document.getElementById('playBtn');
+const resetBtn=document.getElementById('resetBtn');
+const dateLbl=document.getElementById('dateLbl');
+playBtn.onclick=()=>{playing=!playing;playBtn.textContent=playing?'Pause':'Play';};
+slider.oninput=()=>{day=+slider.value;playing=false;playBtn.textContent='Play';};
+speedSlider.oninput=()=>{SPEED=+speedSlider.value;};
+const ZMIN=15,ZMAX=2000;
+zoomSlider.oninput=()=>{
+  const dist=ZMAX-(+zoomSlider.value)+ZMIN;
+  const dir=camera.position.clone().sub(controls.target).normalize();
+  camera.position.copy(controls.target).add(dir.multiplyScalar(dist));
+};
+function resetView(){
+  camera.position.set(0,380,620); controls.target.set(0,0,0);
+  day=0; slider.value=0; SPEED=6; speedSlider.value=6;
+  playing=true; playBtn.textContent='Pause';
+}
+resetBtn.onclick=resetView;
+
+function place(){const e=toScene(positionAt(EARTH,day)),g=toScene(positionAt(GE56,day));
+  earthBody.position.copy(e);ge56Body.position.copy(g);
+  earthLbl.position.set(e.x,e.y+20,e.z);ge56Lbl.position.set(g.x,g.y+20,g.z);
+  dateLbl.textContent='Day '+Math.round(day);}
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+(function loop(){requestAnimationFrame(loop);
+  if(playing){day+=SPEED;if(day>6000)day=0;slider.value=day;}
+  earthBody.rotation.y+=0.008;ge56Body.rotation.y+=0.02;
+  const dist=camera.position.distanceTo(controls.target);
+  zoomSlider.value=(ZMAX-dist+ZMIN).toFixed(0);
+  controls.update();place();renderer.render(scene,camera);})();
+</script>
+</body>
+</html>
