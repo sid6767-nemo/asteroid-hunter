@@ -13,3 +13,8 @@ web/uploads/
 web/static/results/
 __pycache__/
 *.pyc
+outputs/
+textures/
+web/uploads/
+web/static/results/
+__pycache__/
