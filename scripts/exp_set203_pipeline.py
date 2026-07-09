@@ -298,16 +298,34 @@ def main():
             H0, W0 = aligned[0].shape
             NW = 700; _scale = NW / W0; NH = int(H0 * _scale)
 
-            # one beacon per asteroid = center of its track; smooth radial glow.
-            # radially symmetric, so the reading is consistent from every approach direction.
-            centers = np.array([np.array(c['fpos'])[0] for c in confirmed]) * _scale   # frame-1 position (matches the backdrop image)
+            # PER-FRAME sound-fields: one beacon per asteroid AT ITS POSITION IN THAT FRAME.
+            # The user scans each frame by ear and locks where they think the object is;
+            # because the beacon MOVES frame to frame, they discover the motion themselves.
+            import json as _json2
             ys, xs = np.mgrid[0:NH, 0:NW].astype(float)
             R = 90.0                                    # reach in display px
-            field = np.zeros((NH, NW))
-            for cx, cy in centers:
-                field = np.maximum(field, np.exp(-((xs-cx)**2 + (ys-cy)**2) / (2*(R/2.5)**2)))
-            _Image.fromarray((field * 255).astype(np.uint8)).save(
+            nfr = len(aligned)
+            for fi in range(nfr):
+                field = np.zeros((NH, NW))
+                for c in confirmed:
+                    cx, cy = np.array(c['fpos'])[fi] * _scale
+                    field = np.maximum(field, np.exp(-((xs-cx)**2 + (ys-cy)**2) / (2*(R/2.5)**2)))
+                _Image.fromarray((field * 255).astype(np.uint8)).save(
+                    os.path.join(OUTPUT_DIR, f'{dataset_name}_soundfield_f{fi+1}.png'))
+            # also keep a combined field (frame-1 beacons) for the simple single-frame listen mode
+            field1 = np.zeros((NH, NW))
+            for c in confirmed:
+                cx, cy = np.array(c['fpos'])[0] * _scale
+                field1 = np.maximum(field1, np.exp(-((xs-cx)**2 + (ys-cy)**2) / (2*(R/2.5)**2)))
+            _Image.fromarray((field1 * 255).astype(np.uint8)).save(
                 os.path.join(OUTPUT_DIR, f'{dataset_name}_soundfield.png'))
+            # truth positions (display px) per asteroid per frame, for scoring the user's locks
+            truth = {'nframes': nfr, 'asteroids': [
+                {'id': n+1, 'positions': [[round(float(p[0]*_scale),1), round(float(p[1]*_scale),1)]
+                                          for p in np.array(c['fpos'])]}
+                for n, c in enumerate(confirmed)]}
+            with open(os.path.join(OUTPUT_DIR, f'{dataset_name}_truth.json'), 'w') as _tf:
+                _json2.dump(truth, _tf)
 
             # backdrop: stretched frame-1 so a sighted tester can also see the field
             ref0 = aligned[0]
@@ -370,11 +388,14 @@ def main():
     results = []
     for n, c in enumerate(confirmed):
         ra, dec = w.all_pix2world(c['f1'][0], c['f1'][1], 0)
+        _H0, _W0 = aligned[0].shape
+        _frac = [[round(float(p[0])/_W0, 5), round(float(p[1])/_H0, 5)] for p in c['fpos']]
         results.append({'id': n+1, 'rate': round(float(c['rate'])),
                         'x': round(float(c['f1'][0])), 'y': round(float(c['f1'][1])),
                         'rms': round(float(c['rms']),2), 'cv': round(float(c['cv']),2),
                         'conc': round(float(c.get('conc',0)),2),
                         'ra': round(float(ra),5), 'dec': round(float(dec),5),
+                        'fpos': _frac,                      # per-frame position, as fractions of the image
                         'name': None, 'sep_arcsec': None})
 
     if DO_SKYBOT:
@@ -392,7 +413,8 @@ def main():
                     print(tbl)
                     if tbl is not None and len(tbl) > 0:
                         cand = _SC(ra=ra, dec=dec, unit='deg')
-                        # SkyBoT returns matches already sorted by distance; take the nearest
+                        # SkyBoT's RA/DEC columns carry units; build the SkyCoord from the
+                        # whole column at once rather than float()-ing each element.
                         try:
                             objs = _SC(ra=tbl['RA'], dec=tbl['DEC'])
                         except Exception:
