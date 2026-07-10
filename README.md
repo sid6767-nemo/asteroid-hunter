@@ -48,7 +48,6 @@ The sample dataset (`data/set203/`) is included, so it works straight out of the
 
 This is a work in progress. Right now:
 
-- One artifact near a very bright star still slips through the filters occasionally.
 - The two faintest known asteroids in the field (V≈22.5 and 23.6) are below the detection threshold — too dim to see in single frames without stacking.
 - One catchable object (2007 DT63, V≈20.1) isn't being picked up yet — it's on the to-do list.
 
