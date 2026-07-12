@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hunt by ear · Asteroid Hunter</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+  .hunt-wrap { max-width: 860px; margin: 0 auto; padding: 18px; }
+  .hunt-title { text-align: center; }
+  .hunt-sub { text-align: center; opacity: .8; max-width: 640px; margin: 6px auto 18px; }
+  #huntStage { position: relative; margin: 0 auto; width: fit-content; outline: none; }
+  #huntStage:focus { box-shadow: 0 0 0 3px #5b8def88; border-radius: 4px; }
+  #huntSky { display: block; max-width: 100%; border-radius: 4px; }
+  #huntOv { position: absolute; inset: 0; pointer-events: none; }
+  .hunt-bar { display: flex; gap: 10px; justify-content: center; margin: 14px 0; flex-wrap: wrap; }
+  .hunt-bar button { padding: 8px 14px; border-radius: 8px; border: 1px solid #46507a;
+                     background: #23283f; color: #dfe4ff; cursor: pointer; font-weight: 600; }
+  .hunt-bar button:disabled { opacity: .5; cursor: default; }
+  #huntStatus { text-align: center; min-height: 1.4em; font-weight: 600; }
+  #huntReadout { text-align: center; font-family: ui-monospace, monospace; font-size: .92em;
+                 opacity: .85; min-height: 1.3em; }
+  #huntLog { max-width: 640px; margin: 14px auto; }
+  #huntLog .hit { padding: 8px 12px; border-left: 3px solid #5ee0a0; margin: 6px 0;
+                  background: #1d2236; border-radius: 0 6px 6px 0; }
+  .hunt-keys { max-width: 640px; margin: 16px auto; font-size: .9em; opacity: .85; line-height: 1.7; }
+  .hunt-keys b { color: #9db4ff; }
+  .hunt-err { text-align: center; color: #ff9c9c; margin-top: 40px; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                     clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="hunt-wrap">
+  <p style="text-align:center"><a href="/detect" style="color:#9db4ff">&larr; back to detection</a></p>
+
+  {% if error %}
+    <h1 class="hunt-title">Hunt by ear</h1>
+    <p class="hunt-err">{{ error }}</p>
+  {% else %}
+    <h1 class="hunt-title">Hunt by ear</h1>
+    <p class="hunt-sub">
+      Somewhere in these frames, things are moving. Nobody will tell you where.
+      The sound you hear is computed live from the raw pixels along the track you are guessing —
+      when light from every frame piles up into one sharp point, it sings.
+      The pipeline's answers stay sealed until you commit.
+    </p>
+
+    <div class="hunt-bar">
+      <button id="huntStart">Start listening</button>
+      <button id="huntSpeech" aria-pressed="true">Speech: on</button>
+      <button id="huntCommit" disabled>Commit guess (Enter)</button>
+    </div>
+
+    <div id="huntStatus" role="status"></div>
+    <div id="huntReadout" aria-hidden="true"></div>
+    <div id="huntLive" class="visually-hidden" aria-live="polite"></div>
+
+    <div style="text-align:center">
+      <div id="huntStage" tabindex="0" role="application"
+           aria-label="Sky field. Arrow keys move, Tab toggles roam and tune, bracket keys change speed, semicolon and quote change direction, Enter commits.">
+        <img id="huntSky" src="{{ url_for('static', filename='results/' + sid + '_backdrop.jpg') }}"
+             alt="Telescope field. Hunt it by sound.">
+        <canvas id="huntOv" aria-hidden="true"></canvas>
+      </div>
+    </div>
+
+    <div id="huntLog"></div>
+
+    <div class="hunt-keys">
+      <b>Arrows</b> — move (Shift = big steps) &nbsp;·&nbsp; <b>Tab</b> — roam / tune mode<br>
+      <b>[</b> / <b>]</b> — speed down / up (Shift = fine) &nbsp;·&nbsp; <b>;</b> / <b>'</b> — rotate direction (Shift = fine)<br>
+      <b>V</b> — speak current speed &amp; direction &nbsp;·&nbsp; <b>P</b> — speak position &nbsp;·&nbsp; <b>Enter</b> — commit guess<br>
+      <b>Roam mode</b>: the app tries every velocity at your cursor and plays the best honest track it finds.
+      <b>Tune mode</b>: you control speed and direction yourself — the pulse quickens as the stack snaps into focus.
+    </div>
+
+    <script>window.HUNT_SID = {{ sid|tojson }};</script>
+    <script src="{{ url_for('static', filename='hunt.js') }}"></script>
+  {% endif %}
+</div>
+</body>
+</html>

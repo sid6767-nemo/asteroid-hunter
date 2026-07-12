@@ -3,6 +3,7 @@
 # Run from the project root:   python web/app.py
 # Then open http://127.0.0.1:5000
 
+import math
 import os
 import re
 import sys
@@ -12,7 +13,7 @@ import glob
 import shutil
 import zipfile
 import subprocess
-from flask import Flask, render_template, request, url_for
+from flask import Flask, jsonify, render_template, request, url_for
 
 app = Flask(__name__)
 
@@ -123,7 +124,52 @@ def detect():
                            count=count,
                            n_frames=n,
                            soundfield_url=soundfield_url,
-                           backdrop_url=backdrop_url)
+                           backdrop_url=backdrop_url,
+                           session_id=session_id)
+
+
+@app.route('/hunt')
+def hunt_latest():
+    """Home-page entry: open the most recent hunt session (newest upload
+    that produced hunt data), falling back to the bundled set203 sample."""
+    from flask import redirect
+    metas = glob.glob(os.path.join(RESULTS_DIR, '*_hunt.json'))
+    if metas:
+        newest = max(metas, key=os.path.getmtime)
+        sid = os.path.basename(newest)[:-len('_hunt.json')]
+        return redirect(f'/hunt/{sid}')
+    return render_template('hunt.html', sid=None,
+                           error="No hunt data yet. Import your images first — "
+                                 "detection saves hunt frames automatically."), 404
+
+
+@app.route('/hunt/<sid>')
+def hunt(sid):
+    """Hunt by ear: find movers in the raw frames with sound, unaided.
+    Serves only the linear frame data -- the candidate results are NOT
+    loaded by this page until the user commits a guess."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', sid):
+        return render_template('hunt.html', sid=None,
+                               error="Invalid session id."), 404
+    if not os.path.exists(os.path.join(RESULTS_DIR, f'{sid}_hunt.json')):
+        return render_template('hunt.html', sid=None,
+                               error="No hunt data for this session. Run a new detection "
+                                     "first — the pipeline now saves hunt frames automatically."), 404
+    return render_template('hunt.html', sid=sid, error=None)
+
+
+_SPEC_CACHE = {}
+
+
+def _col(tbl, key):
+    """Read a column if Horizons returned it, else None."""
+    try:
+        if key in tbl.colnames:
+            v = float(tbl[key][0])
+            return v if v == v else None       # drop NaN
+    except Exception:
+        pass
+    return None
 
 
 def _fetch_elements(name):
@@ -133,6 +179,157 @@ def _fetch_elements(name):
     return {'a': float(el['a'][0]),   'e':  float(el['e'][0]),
             'i': float(el['incl'][0]),'Om': float(el['Omega'][0]),
             'w': float(el['w'][0]),   'M':  float(el['M'][0])}
+
+
+def _classify(a, q):
+    if q is not None and q < 1.3:
+        return 'Near-Earth asteroid'
+    if a is None:
+        return 'Asteroid'
+    if a < 2.0:  return 'Inner asteroid'
+    if a < 2.5:  return 'Main belt (inner)'
+    if a < 2.82: return 'Main belt (middle)'
+    if a < 3.6:  return 'Main belt (outer)'
+    return 'Outer solar system object'
+
+
+_EARTH_EL = dict(a=1.00000261, e=0.01671123, i=0.0, Om=0.0, w=102.93768193)
+
+
+def _orbit_pts(a, e, i, Om, w, th):
+    import numpy as np
+    i, Om, w = np.radians([i, Om, w])
+    r = a * (1 - e * e) / (1 + e * np.cos(th))
+    P = np.vstack([r * np.cos(th), r * np.sin(th), np.zeros_like(th)])
+    Rz = lambda t: np.array([[np.cos(t), -np.sin(t), 0], [np.sin(t), np.cos(t), 0], [0, 0, 1]])
+    Rx = lambda t: np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
+    return ((Rz(Om) @ Rx(i) @ Rz(w)) @ P).T
+
+
+def _moid(el, coarse=720):
+    """Minimum distance between this orbit and Earth's orbit, in AU.
+
+    Validated against published values: Bennu 0.0029 (JPL 0.0032),
+    Apophis 0.00021 (JPL 0.00019).
+    """
+    import numpy as np
+    th = np.linspace(0, 2 * np.pi, coarse, endpoint=False)
+    A, B = _orbit_pts(**el, th=th), _orbit_pts(**_EARTH_EL, th=th)
+    D = np.linalg.norm(A[:, None, :] - B[None, :, :], axis=2)
+    ia, ib = np.unravel_index(np.argmin(D), D.shape)
+    best, span = float(D[ia, ib]), 2 * np.pi / coarse
+    a0, b0 = th[ia], th[ib]
+    for _ in range(4):                                  # zoom in on the winning pair
+        ta = np.linspace(a0 - span, a0 + span, 60)
+        tb = np.linspace(b0 - span, b0 + span, 60)
+        A, B = _orbit_pts(**el, th=ta), _orbit_pts(**_EARTH_EL, th=tb)
+        D = np.linalg.norm(A[:, None, :] - B[None, :, :], axis=2)
+        ia, ib = np.unravel_index(np.argmin(D), D.shape)
+        best = float(D[ia, ib]); a0, b0 = ta[ia], tb[ib]; span /= 12
+    return best
+
+
+def _sentry(name):
+    """NASA's own impact-risk assessment, if this object is on the Sentry list."""
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    url = 'https://ssd-api.jpl.nasa.gov/sentry.api?des=' + urllib.parse.quote(name)
+    try:
+        with urllib.request.urlopen(url, timeout=6) as r:
+            d = _json.loads(r.read().decode())
+    except Exception:
+        return None
+    summ = d.get('summary')
+    if not summ:
+        return None
+    try:
+        return {'ip': float(summ.get('ip')), 'ps_cum': summ.get('ps_cum'), 'ts_max': summ.get('ts_max')}
+    except Exception:
+        return None
+
+
+def _hazard(q, moid_au, H, name):
+    """Plain-language verdict on whether this thing can reach us."""
+    if q is not None and q > 1.3:
+        return {'verdict': 'No — it cannot reach Earth',
+                'why': "Its orbit never comes closer to the Sun than %.2f AU, while Earth orbits at 1 AU. "
+                       "The two orbits never come near each other." % q,
+                'impact': 'Zero. Not physically possible on its current orbit.',
+                'sentry': None}
+    if moid_au is not None and moid_au > 0.05:
+        return {'verdict': 'Near-Earth, but not hazardous',
+                'why': "Its orbit comes within %.3f AU of Earth's — close enough to be a near-Earth object, "
+                       "but beyond the 0.05 AU threshold for a potentially hazardous asteroid." % moid_au,
+                'impact': 'Not on any impact-risk list.',
+                'sentry': None}
+    s = _sentry(name)
+    label = 'Potentially hazardous asteroid' if (H is not None and H < 22) else 'Near-Earth, orbits cross closely'
+    if s and s.get('ip') is not None:
+        ip = s['ip']
+        odds = ('about 1 in %s' % format(int(round(1 / ip)), ',')) if ip > 0 else 'effectively zero'
+        return {'verdict': label,
+                'why': "Its orbit passes within %.4f AU of Earth's." % (moid_au or 0),
+                'impact': 'NASA Sentry gives a cumulative impact probability of %.2e (%s).' % (ip, odds),
+                'sentry': s}
+    return {'verdict': label,
+            'why': "Its orbit passes within %.4f AU of Earth's." % (moid_au or 0),
+            'impact': 'Not currently listed on NASA Sentry, so no measurable impact probability.',
+            'sentry': None}
+
+
+def _fetch_specs(name):
+    """Full spec sheet for the flash card. Cached, because JPL is slow."""
+    if name in _SPEC_CACHE:
+        return _SPEC_CACHE[name]
+    from astroquery.jplhorizons import Horizons
+    from astropy.time import Time
+    el = Horizons(id=name, location='@sun', epochs=Time.now().jd).elements()
+
+    a  = _col(el, 'a');      e = _col(el, 'e');   i = _col(el, 'incl')
+    q  = _col(el, 'q');      Q = _col(el, 'Q');   H = _col(el, 'H')
+    per_days = _col(el, 'period')
+
+    # rough size from absolute magnitude, assuming a typical 14% albedo
+    diameter_km = None
+    if H is not None:
+        diameter_km = (1329.0 / math.sqrt(0.14)) * (10 ** (-H / 5.0))
+
+    moid_au = None
+    hazard = None
+    try:
+        if None not in (a, e, i):
+            moid_au = _moid({'a': a, 'e': e, 'i': i,
+                             'Om': _col(el, 'Omega') or 0.0, 'w': _col(el, 'w') or 0.0})
+            hazard = _hazard(q, moid_au, H, name)
+    except Exception:
+        pass
+
+    specs = {
+        'name': name,
+        'moid_au': moid_au,
+        'hazard': hazard,
+        'targetname': str(el['targetname'][0]) if 'targetname' in el.colnames else name,
+        'a': a, 'e': e, 'i': i,
+        'Om': _col(el, 'Omega'), 'w': _col(el, 'w'), 'M': _col(el, 'M'),
+        'q': q, 'Q': Q, 'H': H,
+        'period_years': (per_days / 365.25) if per_days else None,
+        'diameter_km': diameter_km,
+        'class': _classify(a, q),
+    }
+    _SPEC_CACHE[name] = specs
+    return specs
+
+
+@app.route('/api/asteroid')
+def api_asteroid():
+    name = (request.args.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'No asteroid specified.'}), 400
+    try:
+        return jsonify(_fetch_specs(name))
+    except Exception as exc:
+        return jsonify({'error': f"Couldn't fetch data for '{name}'.", 'detail': str(exc)}), 502
 
 
 @app.route('/orbit')

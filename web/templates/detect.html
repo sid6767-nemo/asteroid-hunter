@@ -5,9 +5,54 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Detect · Asteroid Hunter</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <!-- Presentation-only pass for flow + accessibility. Scoped under .detect; no JS/ids touched. -->
+  <style>
+    html { scroll-behavior:smooth; }
+
+    /* clear keyboard focus on every interactive control */
+    .detect a:focus-visible,
+    .detect button:focus-visible,
+    .detect .ctrl:focus-visible,
+    .detect .orbit-btn:focus-visible,
+    .detect .hotspot:focus-visible,
+    .detect input:focus-visible,
+    .detect #snWrap:focus-visible {
+      outline:3px solid #ffd24d; outline-offset:3px; border-radius:8px;
+    }
+
+    /* comfortable tap targets for buttons (motor + mobile accessibility) */
+    .detect .ctrl, .detect .orbit-btn { min-height:40px; display:inline-flex; align-items:center; justify-content:center; }
+    .detect .ctrl { transition:border-color .15s, background .15s; }
+    .detect .ctrl:hover { background:#182036; }
+
+    /* gentle vertical rhythm so the long page reads as a sequence */
+    .detect .viewer-block,
+    .detect .sn-controls,
+    .detect .strip-title { scroll-margin-top:1.2rem; }
+    .detect .strip-title { margin-top:2.4rem; padding-top:1.8rem; border-top:1px solid var(--line); }
+    .detect .viewer-block { margin-top:2rem; }
+
+    /* slightly more readable hint text */
+    .detect .hint { color:#a7b1c6; }
+
+    /* flowy scroll-reveal (classes are added by the decorative script below;
+       .rvd = fade+slide for text, .rvf = fade-only for the viewer/sonar so their
+       overlay geometry is never transformed) */
+    .detect .rvd { opacity:0; transform:translateY(16px); transition:opacity .7s ease, transform .7s ease; }
+    .detect .rvf { opacity:0; transition:opacity .9s ease; }
+    .detect .rvd.in, .detect .rvf.in { opacity:1; transform:none; }
+
+    #sky-bg { position:fixed; inset:0; z-index:-1; pointer-events:none; }
+
+    @media (prefers-reduced-motion:reduce) {
+      html { scroll-behavior:auto; }
+      .detect .spinner { animation-duration:2.4s; }
+      .detect .rvd, .detect .rvf { opacity:1; transform:none; transition:none; }
+    }
+  </style>
 </head>
 <body>
-  <main class="wrap">
+  <main class="wrap detect">
     <a class="back" href="{{ url_for('home') }}">← back</a>
     <h1>Upload your frames</h1>
     <p class="tagline">
@@ -45,6 +90,8 @@
       {% endif %}
 
       {% if frame_images %}
+      <script src="{{ url_for('static', filename='asteroid_card.js') }}"></script>
+
       <!-- ============ INTERACTIVE VIEWER (zoom + blink) ============ -->
       <div class="viewer-block">
         <h3>Inspect &amp; blink the frames</h3>
@@ -56,6 +103,7 @@
 
         <div id="viewer" class="viewer">
           <img id="blinkImg" class="viewer-img" src="{{ frame_images[0] }}" alt="frame">
+          <div id="hotspots" aria-hidden="false"></div>
           <div id="frameLabel" class="frame-label">Frame 1 / {{ frame_images|length }}</div>
         </div>
 
@@ -84,6 +132,8 @@
 
       <script>
         const FRAMES = [{% for f in frame_images %}"{{ f }}"{% if not loop.last %},{% endif %}{% endfor %}];
+        const CANDS  = {{ candidates|tojson }};
+        const hotLayer = document.getElementById('hotspots');
         const img = document.getElementById('blinkImg');
         const label = document.getElementById('frameLabel');
         const viewer = document.getElementById('viewer');
@@ -91,21 +141,75 @@
         let scale = 1, tx = 0, ty = 0, dragging = false, sx = 0, sy = 0;
         FRAMES.forEach(src => { const im = new Image(); im.src = src; });  // preload for smooth blinking
 
-        function apply() { img.style.transform =
-          `translate(${tx}px, ${ty}px) scale(${scale})`; }
+        function apply() {
+          const t = `translate(${tx}px, ${ty}px) scale(${scale})`;
+          img.style.transform = t;
+          hotLayer.style.transform = t;
+          hotLayer.querySelectorAll('.hotspot').forEach(d => {
+            d.style.transform = `scale(${1 / scale})`;      // keep dots the same on-screen size
+          });
+        }
         function show(i) {
           idx = (i + FRAMES.length) % FRAMES.length;
           img.src = FRAMES[idx];
           label.textContent = `Frame ${idx + 1} / ${FRAMES.length}`;
+          placeHotspots();
         }
+
+        /* ---- clickable asteroid hotspots ---- */
+        function buildHotspots() {
+          hotLayer.innerHTML = '';
+          CANDS.forEach((c, n) => {
+            if (!c.fpos) return;                            // older results.json, no per-frame data
+            const d = document.createElement('button');
+            d.type = 'button';
+            d.className = 'hotspot';
+            d.dataset.n = n;
+            d.title = c.name ? `Candidate #${c.id} — ${c.name}` : `Candidate #${c.id} — not in catalog`;
+            d.setAttribute('aria-label', d.title);
+            d.onclick = (e) => {
+              e.stopPropagation();
+              if (playing) { AsteroidCard.toast('Pause first, then click an asteroid to see its details.'); return; }
+              if (!c.name) { AsteroidCard.toast(`Candidate #${c.id} isn't in the catalog, so there's no orbit data for it yet.`); return; }
+              AsteroidCard.show(c.name, { rate: c.rate, ra: c.ra, dec: c.dec });
+            };
+            hotLayer.appendChild(d);
+          });
+          syncLayer(); placeHotspots();
+        }
+        function syncLayer() {
+          hotLayer.style.position = 'absolute';
+          hotLayer.style.left   = img.offsetLeft + 'px';
+          hotLayer.style.top    = img.offsetTop + 'px';
+          hotLayer.style.width  = img.offsetWidth + 'px';
+          hotLayer.style.height = img.offsetHeight + 'px';
+          hotLayer.style.transformOrigin = getComputedStyle(img).transformOrigin;
+        }
+        function placeHotspots() {
+          hotLayer.querySelectorAll('.hotspot').forEach(d => {
+            const c = CANDS[+d.dataset.n];
+            const f = c.fpos[Math.min(idx, c.fpos.length - 1)];
+            d.style.left = (f[0] * 100) + '%';
+            d.style.top  = (f[1] * 100) + '%';
+          });
+        }
+        img.addEventListener('load', () => { syncLayer(); placeHotspots(); });
+        window.addEventListener('resize', () => { syncLayer(); apply(); });
         function play() {
           playing = true; document.getElementById('playBtn').textContent = '⏸ Pause';
+          hotLayer.style.opacity = '0.25';
           const d = 1650 - parseInt(document.getElementById('speed').value, 10);
           clearInterval(timer); timer = setInterval(() => show(idx + 1), d);
         }
         function pause() {
           playing = false; document.getElementById('playBtn').textContent = '▶ Play';
+          hotLayer.style.opacity = '1';
           clearInterval(timer);
+        }
+        buildHotspots();
+        if (CANDS.length) {
+          window.addEventListener('load', () =>
+            AsteroidCard.toast('Pause, then click a circled asteroid to see its details.'));
         }
         document.getElementById('playBtn').onclick = () => playing ? pause() : play();
         document.getElementById('prevBtn').onclick = () => { pause(); show(idx - 1); };
@@ -133,59 +237,300 @@
       </script>
       {% endif %}
 
-      {% if soundfield_url and backdrop_url %}
-      <h3 class="strip-title">&#128266; Listen &mdash; find them by ear</h3>
-      <p class="hint">For blind and low-vision users: move your cursor over the sky. The sound gets louder and higher as you approach a real asteroid, and peaks when you land on it. Empty sky is silent.</p>
+      {% if candidates and frame_images %}
+      <h3 class="strip-title">&#128266; Detect by ear</h3>
+      <p class="hint">An asteroid is a dot that <b>moves</b> between frames. In each frame, find the moving object by ear and click on it. Follow the <b>same</b> object through every frame to detect it &mdash; then hunt the next one. There are <b>{{ candidates|length }}</b> hiding here.</p>
+      <p class="hint" style="font-size:.78rem">Move the mouse to scan, click to lock. Press <b>Esc</b> to finish early. <span style="opacity:.7">Screen-reader users: arrow keys move, Shift+arrow jumps, Enter locks.</span></p>
+
+      <div class="sn-controls">
+        <button id="snStart" class="orbit-btn">Start listening</button>
+        <button id="snSpeech" class="orbit-btn" aria-pressed="true">Speech: on</button>
+        <button id="snFinish" class="orbit-btn">Finish now</button>
+        <button id="snReset" class="orbit-btn">Reset</button>
+      </div>
+
+      <div class="sn-readout">
+        <div id="snProgress">Asteroids found: 0 of {{ candidates|length }}</div>
+        <div id="snFrameLbl"></div>
+        <div id="snStatus" role="status"></div>
+      </div>
+      <div id="snLive" class="sn-sr" aria-live="assertive"></div>
+
+      <div class="sn-meter"><div id="snBar"></div></div>
+
       <div style="text-align:center">
-        <button id="sonarStart" class="orbit-btn">Click to start listening</button>
-        <div id="sonarStatus" style="height:1.4rem;font-weight:600;margin:.4rem;color:#ffd24d"></div>
-        <div id="sonarMeter" style="height:14px;width:560px;max-width:92%;margin:.5rem auto;background:#111a2e;border-radius:8px;overflow:hidden">
-          <div id="sonarBar" style="height:100%;width:0;background:linear-gradient(90deg,#3987e5,#ffd24d,#ff5c5c)"></div>
-        </div>
-        <div id="sonarWrap" style="position:relative;display:inline-block;cursor:crosshair">
-          <img id="sonarSky" src="{{ backdrop_url }}" alt="sky region to scan by ear" style="width:560px;max-width:92vw;border-radius:10px;border:1px solid #223">
-          <div id="sonarCursor" style="position:absolute;width:24px;height:24px;border:2px solid #fff;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;opacity:.7;box-shadow:0 0 10px #fff;left:-50px;top:-50px"></div>
+        <div id="snWrap" tabindex="0" role="application" aria-label="Sky scanner. Arrow keys to move, Enter to lock.">
+          <img id="snSky" src="{{ frame_images[0] }}" alt="Telescope frame. Scan it with sound to find the moving object.">
+          <canvas id="snOv" aria-hidden="true"></canvas>
         </div>
       </div>
-      <canvas id="sonarField" style="display:none"></canvas>
+      <div id="snResult"></div>
+
+      {% if session_id %}
+      <div style="text-align:center;margin-top:16px">
+        <a href="/hunt/{{ session_id }}"
+           style="display:inline-block;padding:10px 18px;border-radius:8px;background:#5b8def;color:#fff;text-decoration:none;font-weight:600">
+          Hunt by ear — real detection, no spoilers &rarr;</a>
+        <div style="font-size:.85em;opacity:.7;margin-top:6px">
+          Find movers in the raw frames yourself. The pipeline's answers stay sealed until you commit a guess.</div>
+      </div>
+      {% endif %}
+
       <script>
       (function(){
-        const startBtn=document.getElementById('sonarStart');
-        if(!startBtn) return;
-        const cv=document.getElementById('sonarField'), fx=cv.getContext('2d',{willReadFrequently:true});
-        const fieldImg=new Image();
-        fieldImg.onload=()=>{cv.width=fieldImg.naturalWidth;cv.height=fieldImg.naturalHeight;fx.drawImage(fieldImg,0,0);};
-        fieldImg.src="{{ soundfield_url }}";
-        const sky=document.getElementById('sonarSky'), cursor=document.getElementById('sonarCursor');
-        const bar=document.getElementById('sonarBar'), status=document.getElementById('sonarStatus');
-        let ac,osc,gain,started=false,target=0,cur=0;
-        startBtn.onclick=()=>{
-          if(started)return; started=true;
-          ac=new (window.AudioContext||window.webkitAudioContext)();
-          osc=ac.createOscillator(); gain=ac.createGain();
-          osc.type='sine'; osc.frequency.value=220; gain.gain.value=0;
-          osc.connect(gain); gain.connect(ac.destination); osc.start();
-          startBtn.textContent='Listening \u2014 move over the sky'; loop();
-        };
-        function sample(e){
-          const r=sky.getBoundingClientRect();
-          const rx=(e.clientX-r.left)/r.width, ry=(e.clientY-r.top)/r.height;
-          if(rx<0||rx>1||ry<0||ry>1){target=0;return;}
-          cursor.style.left=(e.clientX-r.left)+'px'; cursor.style.top=(e.clientY-r.top)+'px';
-          if(!cv.width) return;
-          const px=Math.floor(rx*cv.width), py=Math.floor(ry*cv.height);
-          target=fx.getImageData(px,py,1,1).data[0]/255;
+        const CAND = {{ candidates|tojson }};
+        const FR   = [{% for f in frame_images %}"{{ f }}"{% if not loop.last %},{% endif %}{% endfor %}];
+        const NF   = FR.length, NA = CAND.length;
+        const startBtn = document.getElementById('snStart');
+        if(!startBtn || !NA || !CAND[0].fpos) return;
+
+        const sky=document.getElementById('snSky'), wrap=document.getElementById('snWrap');
+        const ov=document.getElementById('snOv'), octx=ov.getContext('2d');
+        const bar=document.getElementById('snBar'), status=document.getElementById('snStatus');
+        const live=document.getElementById('snLive'), frameLbl=document.getElementById('snFrameLbl');
+        const progress=document.getElementById('snProgress'), result=document.getElementById('snResult');
+        const speechBtn=document.getElementById('snSpeech');
+        const COLORS=['#ff5c5c','#5ee0a0','#ffd24d','#8ec5ff','#c9a0ff','#ffa07a'];
+
+        /* ---- speech, using the best voice this machine actually has ---- */
+        const synth = window.speechSynthesis;
+        let speechOn = true, voice = null;
+        function pickVoice(){
+          if(!synth) return;
+          const vs = synth.getVoices();
+          const prefer = ['Google UK English Male','Google US English','Daniel','Karen','Samantha','Alex'];
+          for(const p of prefer){ const v = vs.find(x => x.name === p); if(v){ voice = v; return; } }
+          voice = vs.find(x => x.lang && x.lang.indexOf('en') === 0) || vs[0] || null;
         }
-        sky.addEventListener('pointermove',sample);
-        sky.addEventListener('pointerleave',()=>{target=0;});
+        if(synth){ pickVoice(); synth.onvoiceschanged = pickVoice; }
+        function say(text, interrupt){
+          live.textContent = text;
+          if(!speechOn || !synth) return;
+          if(interrupt) synth.cancel();
+          const u = new SpeechSynthesisUtterance(text);
+          if(voice) u.voice = voice;
+          u.rate = 0.98; u.pitch = 1.0;
+          synth.speak(u);
+        }
+        speechBtn.onclick = () => {
+          speechOn = !speechOn;
+          speechBtn.textContent = 'Speech: ' + (speechOn ? 'on' : 'off');
+          speechBtn.setAttribute('aria-pressed', speechOn);
+          if(!speechOn && synth) synth.cancel(); else say('Speech on');
+        };
+
+        /* ---- the sound field, straight from the pipeline's positions ---- */
+        const SIGMA = 90 / 2.5 / 700;
+        function aspect(){ return sky.clientHeight / (sky.clientWidth || 1); }
+        function fieldAt(fx, fy){
+          let best = 0;
+          for(let i = 0; i < NA; i++){
+            if(found.indexOf(i) !== -1) continue;          // already caught: stop guiding to it
+            const p = CAND[i].fpos[Math.min(cf, CAND[i].fpos.length-1)];
+            const dx = fx - p[0], dy = (fy - p[1]) * aspect();
+            const v = Math.exp(-(dx*dx + dy*dy) / (2*SIGMA*SIGMA));
+            if(v > best) best = v;
+          }
+          return best;
+        }
+        function nearest(f, L){
+          let best = 1e9, ai = -1;
+          for(let i = 0; i < NA; i++){
+            const p = CAND[i].fpos[Math.min(f, CAND[i].fpos.length-1)];
+            const dx = L.x - p[0], dy = (L.y - p[1]) * aspect();
+            const d = Math.hypot(dx, dy);
+            if(d < best){ best = d; ai = i; }
+          }
+          return { dist: best, ast: ai };
+        }
+        function word(d){ return d < 0.035 ? 'spot on' : d < 0.085 ? 'close' : 'off target'; }
+
+        /* ---- state ---- */
+        let cf = 0, locks = new Array(NF).fill(null), found = [];
+        let cursor = { x: 0.5, y: 0.5 }, target = 0, cur = 0;
+        let ac, osc, gain, started = false, wasHot = false, over = false;
+
+        function sizeCanvas(){ ov.width = sky.clientWidth; ov.height = sky.clientHeight; draw(); }
+        sky.addEventListener('load', sizeCanvas);
+        window.addEventListener('resize', sizeCanvas);
+
+        function updateProgress(){
+          progress.textContent = 'Asteroids found: ' + found.length + ' of ' + NA;
+        }
+        function showFrame(announce){
+          sky.src = FR[cf];
+          frameLbl.textContent = 'Frame ' + (cf+1) + ' of ' + NF;
+          if(announce) say('Frame ' + (cf+1) + ' of ' + NF, true);
+          wasHot = false; refresh(); draw();
+        }
+        function refresh(){ target = over ? 0 : fieldAt(cursor.x, cursor.y); }
+
+        function draw(){
+          const W = ov.width, H = ov.height;
+          if(!W) return;
+          octx.clearRect(0,0,W,H);
+          locks.forEach((L,i) => {
+            if(!L) return;
+            const x = L.x*W, y = L.y*H;
+            octx.strokeStyle = COLORS[i % COLORS.length]; octx.lineWidth = 2;
+            octx.beginPath(); octx.arc(x, y, 10, 0, 7); octx.stroke();
+            octx.fillStyle = octx.strokeStyle; octx.font = '12px sans-serif';
+            octx.fillText('F' + (i+1), x + 12, y + 4);
+          });
+          if(over) return;
+          const x = cursor.x*W, y = cursor.y*H;
+          octx.strokeStyle = '#fff'; octx.globalAlpha = .75; octx.lineWidth = 2;
+          octx.beginPath(); octx.arc(x, y, 12, 0, 7); octx.stroke();
+          octx.beginPath();
+          octx.moveTo(x-16, y); octx.lineTo(x+16, y);
+          octx.moveTo(x, y-16); octx.lineTo(x, y+16);
+          octx.stroke(); octx.globalAlpha = 1;
+        }
+
+        /* ---- mouse ---- */
+        function toFrac(e){
+          const r = sky.getBoundingClientRect();
+          return { x: (e.clientX - r.left)/r.width, y: (e.clientY - r.top)/r.height };
+        }
+        function scan(e){
+          if(over) return;
+          const p = toFrac(e);
+          if(p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1){ target = 0; return; }
+          cursor = p; refresh(); draw();
+        }
+        sky.addEventListener('pointermove', scan);
+        sky.addEventListener('pointerdown', scan);
+        sky.addEventListener('pointerup', e => { if(over) return; scan(e); lockHere(); });
+        sky.addEventListener('pointerleave', () => { target = 0; });
+
+        /* ---- keyboard: the path a blind user actually takes ---- */
+        wrap.addEventListener('keydown', e => {
+          if(over) return;
+          const step = (e.shiftKey ? 40 : 8) / (sky.clientWidth || 560);
+          let handled = true;
+          switch(e.key){
+            case 'ArrowLeft':  cursor.x = Math.max(0, cursor.x - step); break;
+            case 'ArrowRight': cursor.x = Math.min(1, cursor.x + step); break;
+            case 'ArrowUp':    cursor.y = Math.max(0, cursor.y - step); break;
+            case 'ArrowDown':  cursor.y = Math.min(1, cursor.y + step); break;
+            case 'Enter': case ' ': lockHere(); break;
+            default: handled = false;
+          }
+          if(handled){ e.preventDefault(); refresh(); draw(); }
+        });
+        document.addEventListener('keydown', e => {
+          if(e.key === 'Escape' && started && !over) finish(true);
+        });
+
+        /* ---- locking, one asteroid at a time ---- */
+        function lockHere(){
+          locks[cf] = { x: cursor.x, y: cursor.y };
+          const r = nearest(cf, locks[cf]);
+          say('Locked frame ' + (cf+1) + '. ' + word(r.dist) + '.', true);
+          if(cf < NF - 1){
+            cf++;
+            setTimeout(() => showFrame(true), 900);
+          } else {
+            setTimeout(judge, 900);
+          }
+        }
+
+        function judge(){
+          const count = {};
+          let moved = 0, prev = null;
+          locks.forEach((L,f) => {
+            const r = nearest(f, L);
+            count[r.ast] = (count[r.ast] || 0) + 1;
+            if(prev) moved += Math.hypot(L.x - prev.x, L.y - prev.y);
+            prev = L;
+          });
+          const top = Object.entries(count).sort((a,b) => b[1]-a[1])[0];
+          const ai = parseInt(top[0]), followed = parseInt(top[1]) === NF;
+
+          let msg;
+          if(!followed){
+            msg = 'Those locks jumped between different objects. Try again from frame 1, following one moving dot.';
+          } else if(moved <= 0.02){
+            msg = 'Your locks barely moved. That looks like a fixed star. Try again from frame 1.';
+          } else if(found.indexOf(ai) !== -1){
+            msg = 'You found that same asteroid again. Look elsewhere for the next one.';
+          } else {
+            found.push(ai);
+            const c = CAND[ai];
+            const who = c.name ? c.name : 'an object not in the catalog';
+            updateProgress();
+            if(found.length === NA){
+              say('You detected ' + who + '. That is all ' + NA + ' asteroids. Well done.', true);
+              return finish(false);
+            }
+            msg = 'You detected ' + who + '. That is ' + found.length + ' of ' + NA
+                + '. Back to frame 1 to find the next one.';
+          }
+          status.textContent = msg;
+          say(msg, true);
+          locks = new Array(NF).fill(null);
+          cf = 0;
+          showFrame(false);
+        }
+
+        /* ---- finish: report only what they actually found ---- */
+        function finish(early){
+          over = true; target = 0;
+          wrap.setAttribute('aria-disabled','true');
+          let html, spoken;
+          if(!found.length){
+            html = '<span class="sn-miss">You finished without detecting any asteroids. Press Reset to try again.</span>';
+            spoken = 'You finished without detecting any asteroids.';
+          } else {
+            const names = found.map(i => CAND[i].name || ('unnamed candidate ' + CAND[i].id));
+            html = '<b>You detected ' + found.length + ' of ' + NA + ' asteroids</b><br>';
+            found.forEach(i => {
+              const c = CAND[i];
+              html += '<div class="sn-hit">' + (c.name ? '<b>' + c.name + '</b>'
+                    : '<b>Candidate #' + c.id + '</b> \u2014 not in the catalog, possibly undiscovered')
+                   + ' &mdash; RA ' + c.ra.toFixed(3) + '&deg;, Dec ' + c.dec.toFixed(3) + '&deg;, moving '
+                   + c.rate + '&Prime; per day</div>';
+            });
+            if(early && found.length < NA){
+              html += '<p class="sn-miss">You stopped early. The other ' + (NA - found.length)
+                    + ' stay hidden \u2014 press Reset to hunt them.</p>';
+            }
+            spoken = 'You detected ' + found.length + ' of ' + NA + ' asteroids: ' + names.join(', ') + '.';
+          }
+          result.innerHTML = html;
+          say(spoken, true);
+          status.textContent = 'Finished.';
+        }
+
+        startBtn.onclick = function(){
+          if(started) return; started = true;
+          ac = new (window.AudioContext || window.webkitAudioContext)();
+          osc = ac.createOscillator(); gain = ac.createGain();
+          osc.type = 'sine'; osc.frequency.value = 220; gain.gain.value = 0;
+          osc.connect(gain); gain.connect(ac.destination); osc.start();
+          this.textContent = 'Listening'; this.disabled = true;
+          sizeCanvas(); wrap.focus(); updateProgress(); showFrame(false);
+          say('Listening. There are ' + NA + ' asteroids to find. Frame 1 of ' + NF + '.', true);
+          loop();
+        };
+        document.getElementById('snFinish').onclick = () => { if(started && !over) finish(true); };
+        document.getElementById('snReset').onclick = () => {
+          found = []; locks = new Array(NF).fill(null); cf = 0; over = false;
+          wrap.removeAttribute('aria-disabled');
+          result.innerHTML = ''; status.textContent = '';
+          updateProgress(); showFrame(true);
+        };
+
         function loop(){
           requestAnimationFrame(loop);
-          cur+=(target-cur)*0.25;
-          const t=ac.currentTime, pulseRate=2+cur*10, pulse=0.65+0.35*Math.sin(t*pulseRate*6.28);
-          gain.gain.setTargetAtTime(cur*cur*0.35*(cur>0.05?pulse:1),t,0.03);
-          osc.frequency.setTargetAtTime(220+cur*660,t,0.03);
-          bar.style.width=(cur*100)+'%';
-          status.textContent = cur>0.85?'\ud83d\udd34 ON AN ASTEROID!' : cur>0.4?'warmer\u2026' : cur>0.12?'faint signal\u2026':'';
+          cur += (target - cur) * 0.25;
+          const t = ac.currentTime, pr = 2 + cur*10, pulse = 0.65 + 0.35*Math.sin(t*pr*6.28);
+          const duck = (synth && synth.speaking) ? 0.35 : 1.0;
+          gain.gain.setTargetAtTime(cur*cur*0.35*(cur > 0.05 ? pulse : 1)*duck, t, 0.03);
+          osc.frequency.setTargetAtTime(220 + cur*660, t, 0.03);
+          bar.style.width = (cur*100) + '%';
+          if(cur > 0.97 && !wasHot){ wasHot = true; say('On the object'); }
+          if(cur < 0.85 && wasHot){ wasHot = false; if(synth) synth.cancel(); }
         }
       })();
       </script>
@@ -210,6 +555,64 @@
       document.getElementById('loading').style.display = 'block';
       document.querySelector('.uploader').style.display = 'none';
     }
+  </script>
+
+  <canvas id="sky-bg" aria-hidden="true"></canvas>
+
+  <script>
+  /* Decorative-only: dim starfield + scroll-reveal. Adds its own classes at runtime,
+     never touches the detection, viewer, or sonar code. No click effects here —
+     clicks on this page are functional (asteroid locking). */
+  (function(){
+    "use strict";
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    /* auto-tag elements for reveal: slide for text, fade-only for viewer/sonar/images */
+    var slide = document.querySelectorAll(".detect h1, .detect .tagline, .detect .uploader, .detect h2, .detect .candidates li, .detect .strip-title, .detect .hint, .detect .legend");
+    var fade  = document.querySelectorAll(".detect .viewer-block .viewer, .detect .controls, .detect .sn-controls, .detect .sn-readout, .detect .sn-meter, .detect #snWrap, .detect .result");
+    slide.forEach(function(el){ el.classList.add("rvd"); });
+    fade.forEach(function(el){ el.classList.add("rvf"); });
+
+    var all = document.querySelectorAll(".rvd, .rvf");
+    if (!reduced && "IntersectionObserver" in window) {
+      var io = new IntersectionObserver(function(es){
+        es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
+      }, {threshold:.1});
+      all.forEach(function(el){ io.observe(el); });
+    } else {
+      all.forEach(function(el){ el.classList.add("in"); });
+    }
+
+    /* dim starfield (fewer, fainter stars than the home page; no shooting stars
+       so nothing streaks across while you're inspecting frames) */
+    var cv = document.getElementById("sky-bg"), cx = cv.getContext("2d");
+    var stars = [], W, H, t = 0;
+    function size(){
+      W = cv.width = window.innerWidth; H = cv.height = window.innerHeight;
+      stars = [];
+      var n = Math.floor(W * H / 16000);
+      for (var i = 0; i < n; i++) stars.push({
+        x: Math.random()*W, y: Math.random()*H,
+        r: Math.random()*1.1 + .3,
+        p: Math.random()*6.28, s: Math.random()*1.5 + .5
+      });
+    }
+    size(); window.addEventListener("resize", size);
+
+    function draw(){
+      cx.clearRect(0, 0, W, H);
+      t++;
+      for (var i = 0; i < stars.length; i++){
+        var s = stars[i];
+        cx.globalAlpha = reduced ? .35 : .18 + .32 * Math.abs(Math.sin(s.p + t * .006 * s.s));
+        cx.fillStyle = "#cfe0ff";
+        cx.beginPath(); cx.arc(s.x, s.y, s.r, 0, 6.28); cx.fill();
+      }
+      cx.globalAlpha = 1;
+      if (!reduced) requestAnimationFrame(draw);
+    }
+    draw();
+  })();
   </script>
 </body>
 </html>

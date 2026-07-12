@@ -22,6 +22,8 @@
   <button id="resetBtn">Reset</button>
 </div>
 <script>window.ASTEROIDS = {{ asteroids|tojson }};</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='asteroid_card.js') }}"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -164,6 +166,7 @@ function makeRock(){
 }
 const astBodies=window.ASTEROIDS.map((a,idx)=>{
   const m=new THREE.Mesh(makeRock(),new THREE.MeshStandardMaterial({color:0x8f867b,roughness:1,metalness:0,flatShading:false}));
+  m.userData.name=a.name;          // so a click knows which asteroid it hit
   scene.add(m); return m;
 });
 
@@ -203,6 +206,29 @@ function place(){const e=toScene(positionAt(EARTH,day));
     astBodies[idx].position.copy(g); astLbls[idx].position.set(g.x,g.y+20,g.z);});
   dateLbl.textContent='Day '+Math.round(day);}
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+
+/* ---- click an asteroid to see its details (must be paused first) ---- */
+const ray=new THREE.Raycaster(), ptr=new THREE.Vector2();
+let downAt=null;
+renderer.domElement.addEventListener('pointerdown',e=>{downAt={x:e.clientX,y:e.clientY};});
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!downAt) return;
+  const drag=Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y);
+  downAt=null;
+  if(drag>5) return;                       // that was an orbit-drag, not a click
+  const r=renderer.domElement.getBoundingClientRect();
+  ptr.x=((e.clientX-r.left)/r.width)*2-1;
+  ptr.y=-((e.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(ptr,camera);
+  const hit=ray.intersectObjects(astBodies,false)[0];
+  if(!hit) return;
+  if(playing){ AsteroidCard.toast('Pause first, then click an asteroid to see its details.'); return; }
+  AsteroidCard.show(hit.object.userData.name);
+});
+window.addEventListener('load',()=>{
+  AsteroidCard.toast('Pause, then click an asteroid to see its details.');
+});
+
 (function loop(){requestAnimationFrame(loop);
   if(playing){day+=SPEED;if(day>6000)day=0;slider.value=day;}
   earthBody.rotation.y+=0.008; astBodies.forEach(b=>b.rotation.y+=0.02);

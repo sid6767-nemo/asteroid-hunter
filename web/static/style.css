@@ -65,3 +65,87 @@ h3 { margin:1.5rem 0 .5rem; font-size:1.1rem; }
 .unknown { color:var(--muted); font-size:.8rem; font-style:italic; }
 
 .all-orbits { display:inline-block; padding:.6rem 1.2rem; font-size:.95rem; }
+
+/* ---- asteroid panel: slides in from the right ---- */
+.ac-overlay{position:fixed;inset:0;background:rgba(3,5,14,.45);backdrop-filter:blur(3px);
+  display:flex;justify-content:flex-end;align-items:stretch;z-index:200;
+  opacity:0;transition:opacity .3s ease}
+.ac-overlay.ac-in{opacity:1}
+
+.ac-card{position:relative;width:min(380px,92vw);height:100%;
+  background:#0e1424;border-left:1px solid #253150;border-radius:18px 0 0 18px;
+  padding:1.7rem 1.5rem 1.4rem;overflow-y:auto;
+  box-shadow:-24px 0 70px rgba(0,0,0,.6);text-align:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#dbe6ff;
+  transform:translateX(100%);transition:transform .34s cubic-bezier(.22,.61,.36,1)}
+.ac-overlay.ac-in .ac-card{transform:translateX(0)}
+
+.ac-close{position:absolute;top:.6rem;right:.8rem;background:none;border:none;color:#7d8aa5;
+  font-size:1.7rem;line-height:1;cursor:pointer;padding:.2rem .45rem;border-radius:6px}
+.ac-close:hover{color:#fff;background:#1b2440}
+.ac-rock{display:block;margin:.4rem auto .7rem;filter:drop-shadow(0 6px 18px rgba(0,0,0,.55))}
+.ac-name{margin:0;font-size:1.35rem;letter-spacing:.01em}
+.ac-class{color:#8ec5ff;font-size:.8rem;margin:.3rem 0 1.2rem;text-transform:uppercase;letter-spacing:.09em}
+.ac-rows{text-align:left}
+.ac-row{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;
+  padding:.45rem 0;border-bottom:1px solid #1a2238;font-size:.88rem}
+.ac-row:last-child{border-bottom:none}
+.ac-k{color:#9fb0d0}
+.ac-v{color:#fff;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.ac-note{display:block;font-style:normal;font-weight:400;color:#6d7b96;font-size:.72rem;margin-top:.12rem}
+.ac-soon{opacity:.45;font-style:italic;margin-top:.5rem;border-top:1px solid #1a2238;padding-top:.65rem}
+.ac-src{color:#5f6d88;font-size:.72rem;line-height:1.45;margin:1rem 0 .2rem;text-align:left}
+.ac-loading{color:#9fb0d0;padding:2.5rem 0;margin:0}
+
+@media (max-width:640px){
+  .ac-card{width:100vw;border-radius:0}
+}
+
+/* ---- 5-second hint toast ---- */
+.ac-toast{position:fixed;left:50%;bottom:2.2rem;transform:translate(-50%,1.2rem);
+  background:#1b2440;color:#dbe6ff;border:1px solid #2c3a5e;border-radius:10px;
+  padding:.6rem 1.1rem;font-size:.88rem;font-family:-apple-system,sans-serif;
+  z-index:300;opacity:0;pointer-events:none;transition:opacity .35s,transform .35s;
+  box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.ac-toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ---- clickable asteroid hotspots over the blink viewer ---- */
+.hotspot{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;
+  border:2px solid rgba(255,255,255,.75);border-radius:50%;cursor:pointer;
+  background:rgba(120,180,255,.10);transition:background .15s,border-color .15s}
+.hotspot:hover{background:rgba(120,180,255,.28);border-color:#8ec5ff}
+.hotspot:focus{outline:3px solid #ffd24d;outline-offset:2px}
+
+/* ---- hazard block on the asteroid panel ---- */
+.ac-hazard{border-radius:12px;padding:.85rem .95rem;margin:0 0 1.1rem;text-align:left;
+  border:1px solid transparent}
+.ac-hz-title{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:#8d9bb5;margin-bottom:.3rem}
+.ac-verdict{font-weight:700;font-size:1rem;line-height:1.3}
+.ac-why{font-size:.78rem;color:#9fb0d0;line-height:1.5;margin:.45rem 0 .35rem}
+.ac-impact{font-size:.83rem;font-weight:600;margin:0}
+.ac-safe{background:rgba(46,125,79,.14);border-color:#2f7d4f}
+.ac-safe .ac-verdict,.ac-safe .ac-impact{color:#7ee0a5}
+.ac-watch{background:rgba(180,140,30,.13);border-color:#8a6a1f}
+.ac-watch .ac-verdict,.ac-watch .ac-impact{color:#ffd24d}
+.ac-danger{background:rgba(160,50,50,.15);border-color:#8a3030}
+.ac-danger .ac-verdict,.ac-danger .ac-impact{color:#ff8a8a}
+
+/* ---- detect-by-ear sonar ---- */
+.sn-controls{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:center;align-items:center;margin:.8rem 0 .6rem}
+.sn-readout{display:flex;flex-direction:column;align-items:center;gap:.25rem;margin:.4rem 0 .2rem;
+  line-height:1.4}
+#snProgress{font-weight:700;color:#8ec5ff;font-size:.95rem}
+#snFrameLbl{font-weight:600;color:#cfe0ff;font-size:.88rem;min-height:1.2em}
+#snStatus{color:#ffd24d;font-weight:600;font-size:.86rem;min-height:1.3em;max-width:560px;text-align:center}
+.sn-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.sn-meter{height:14px;width:560px;max-width:92%;margin:.55rem auto .7rem;background:#111a2e;
+  border-radius:8px;overflow:hidden}
+#snBar{height:100%;width:0;background:linear-gradient(90deg,#3987e5,#ffd24d,#ff5c5c)}
+#snWrap{position:relative;display:inline-block;cursor:crosshair;touch-action:none;border-radius:10px}
+#snWrap:focus{outline:3px solid #ffd24d;outline-offset:3px}
+#snSky{width:560px;max-width:92vw;border-radius:10px;border:1px solid #223;display:block}
+#snOv{position:absolute;left:0;top:0;pointer-events:none}
+#snResult{max-width:580px;margin:.9rem auto;font-size:.88rem;line-height:1.65;color:#cfe0ff;text-align:left}
+.sn-hit{padding:.4rem 0;border-bottom:1px solid #1a2238;color:#7ee0a5}
+.sn-hit:last-child{border-bottom:none}
+.sn-miss{color:#ffd24d;display:block;margin-top:.5rem}

@@ -117,12 +117,13 @@ def main():
     # --- align all frames to frame 0 ---
     print("\nAligning frames to frame 1...")
     aligned = [images[0]]
+    align_ok = [True]
     for i in range(1, N):
         try:
             reg, _ = aa.register(images[i], images[0], detection_sigma=5)
-            aligned.append(reg); print(f"  Frame {i+1} aligned OK")
+            aligned.append(reg); align_ok.append(True); print(f"  Frame {i+1} aligned OK")
         except Exception as e:
-            print(f"  Frame {i+1} FAILED: {e}"); aligned.append(images[i])
+            print(f"  Frame {i+1} FAILED: {e}"); aligned.append(images[i]); align_ok.append(False)
 
     # --- background / threshold / saturation (frame 1) ---
     mask0 = (aligned[0] == 0)
@@ -376,6 +377,38 @@ def main():
             f2.savefig(os.path.join(OUTPUT_DIR, f'{dataset_name}_frame{fi+1}.png'), dpi=130)
             plt.close(f2)
         print(f"Saved {N} individual frames for the viewer")
+
+    # hunt-mode export: binned, background-subtracted LINEAR frames as raw
+    # uint16 binaries + metadata JSON, for the /hunt shift-and-stack-by-ear
+    # page. The display PNGs above are stretched and have the candidate
+    # circles drawn on them; the hunt needs clean linear pixels and must
+    # contain NO candidate info (the user finds movers unaided, by ear).
+    if SAVE_FRAMES:
+        try:
+            import json as _hj
+            HBIN = 2                      # 2x2 binning: halves noise, keeps the PSF sampled
+            HOFF = 1000.0                 # offset preserves negative noise around zero
+            h_gain, h_sig, hb, wb = [], [], 0, 0
+            for fi, img in enumerate(aligned):
+                Hb = img.shape[0] // HBIN * HBIN; Wb = img.shape[1] // HBIN * HBIN
+                b = img[:Hb, :Wb].reshape(Hb//HBIN, HBIN, Wb//HBIN, HBIN).mean(axis=(1, 3))
+                nod = (img[:Hb, :Wb] == 0).reshape(Hb//HBIN, HBIN, Wb//HBIN, HBIN).max(axis=(1, 3)) > 0
+                _, mb, sb = sigma_clipped_stats(b[~nod], sigma=3.0)
+                gain = (400.0 * sb) / 64535.0        # ~0.006 sigma per step; 0 reserved
+                d16 = np.clip(np.round((b - mb) / gain + HOFF), 1, 65535).astype('<u2')
+                d16[nod] = 0                          # 0 = no-data sentinel
+                d16.tofile(os.path.join(OUTPUT_DIR, f'{dataset_name}_hunt_f{fi}.bin'))
+                h_gain.append(float(gain)); h_sig.append(float(sb)); hb, wb = d16.shape
+            with open(os.path.join(OUTPUT_DIR, f'{dataset_name}_hunt.json'), 'w') as hf:
+                _hj.dump({'width': wb, 'height': hb, 'bin': HBIN,
+                          'pixel_scale': PIXEL_SCALE, 'nframes': N,
+                          't_days': [float(t) for t in t_days],
+                          'gain': [round(g, 6) for g in h_gain],
+                          'sigma': [round(s, 3) for s in h_sig],
+                          'offset': HOFF, 'align_ok': align_ok}, hf)
+            print(f"Saved hunt data -> {dataset_name}_hunt.json + {N} .bin frames")
+        except Exception as _e:
+            print(f"  (hunt export skipped: {_e})")
 
     plt.show()
 
