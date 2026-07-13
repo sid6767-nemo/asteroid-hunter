@@ -56,3 +56,46 @@ This is a work in progress. Right now:
 ## Data credit
 
 The sample images come from the **International Astronomical Search Collaboration (IASC)** and the **Pan-STARRS** survey. They're used here for educational and practice purposes.
+
+## Faint recovery: hearing below the detection limit
+
+My pipeline detects asteroids by finding them in single frames first, then
+linking the ones that move. That means it can never see anything too faint
+for one exposure. The "hunt by ear" score works differently — it pools light
+from all 4 frames along a guessed track (shift-and-stack) before deciding.
+In theory that reaches fainter objects. I tested whether it actually does.
+
+**The experiment** (`scripts/exp_faint_recovery.py`): ask SkyBoT for every
+known asteroid in the set203 field, convert each one's predicted sky position
+to a pixel track, and run the blind roam score there — plus the same search
+on 12 patches of empty sky, as a "fake floor" for what pure noise can fluke.
+
+**Result:**
+
+| asteroid    | V    | pipeline | roam score | recovered velocity vs truth       |
+|-------------|------|----------|-----------|-----------------------------------|
+| 2002 GE56   | 19.2 | found    | 25.3      | 820"/d @ 90° vs 788 @ 90° — match |
+| 2004 RH62   | 19.9 | found    | 17.6      | 745"/d @ 80° vs 725 @ 82° — match |
+| 2015 RM287  | 21.8 | found    | 1.9       | 995"/d @ 80° vs 947 @ 80° — match |
+| 2002 QK157  | 22.5 | *missed* | 0.46      | 845"/d @ 68° vs 826 @ 71° — match |
+| 2021 RY128  | 23.6 | *missed* | 0.23      | 125° off — no match (noise)       |
+
+Empty-sky floor (same search effort): 0.30.
+
+**The recovery.** At the predicted position of 2002 QK157 — V22.5, below my
+pipeline's single-frame limit — the blind search returned its strongest
+response at 845"/day, 68°, matching the asteroid's true motion to within 3°
+and 2% in speed. The score amplitude alone (1.5× the empty-sky floor) would
+not be conclusive; the velocity agreement is what makes it a recovery. Blank
+sky can fluke a score, but it flukes at a random velocity out of ~8,640
+searched — not at the exact motion of a cataloged asteroid.
+
+**The honest half.** 2021 RY128 (V23.6) also crept slightly above the floor,
+but its recovered velocity was 125° off the truth — noise, and the method
+correctly rejects it. And the scores track brightness exactly as physics
+predicts (V19.2 → 25 down to V23.6 → noise), which is how I know the score
+is measuring something real.
+
+What I learned: my earlier "false positives" question had two answers at
+once. One faint signal was a real asteroid my pipeline couldn't see; another
+was noise. The velocity-match test is what separates them.
