@@ -19,6 +19,46 @@ Run on the IASC set203 practice dataset (4 frames, ~21 minutes apart), the tool 
 
 Each pipeline match is within ~3.8 arcseconds of the official catalog position. The QK157 recovery is documented in detail in the *Faint recovery* section below, including the honest counter-example where the same method correctly rejects noise.
 
+### The pipeline in action
+
+![Pipeline tracks 3 real asteroids across the field](docs/images/pipeline_result.png)
+
+*Current pipeline output on set203: cyan → red arrows mark the same object's motion across the 4 stacked frames. Three genuine movers are found; every star sits still in the difference image and is correctly ignored.*
+
+### The web app
+
+![Asteroid Hunter home page](docs/images/web_home.png)
+
+*Landing page: upload frames or hunt by ear.*
+
+![Detection results with all frames side by side](docs/images/web_results_frames.png)
+
+*Results page: confirmed movers marked across every frame.*
+
+![Detect by ear](docs/images/web_detect_by_ear.png)
+
+*Detect by ear: find moving objects using sound.*
+
+![Inspect and blink the frames](docs/images/web_blink_viewer.png)
+
+*Blink viewer: flip frames to spot real movers.*
+
+### How the detection method evolved
+
+Three stages, each with an honest failure that pushed the next:
+
+![Frame subtraction attempt](docs/images/stage1_subtraction.png)
+
+**Stage 1 — pure subtraction.** Line two frames up, subtract, whatever moved should light up. Reality: imperfect alignment leaves bright edge residuals around every star, and faint asteroids drown in that noise. Too many false positives to be useful.
+
+![Deblending era](docs/images/stage2_deblending.png)
+
+**Stage 2 — segmentation + deblending.** Instead of subtracting pixels, find every point of light in each frame separately and split overlapping blobs (deblending). Cleaner detections, but no way to tell a faint real mover from noise. Still too many false positives.
+
+![Full pipeline](docs/images/pipeline_result.png)
+
+**Stage 3 — track linking + validation.** Detect points in every frame independently, then keep only sets of points that fall on a straight line at consistent brightness across all 4 frames — asteroids move, stars don't. Cross-match survivors against SkyBoT. This is what the pipeline does today, and it produces the 3 confirmed detections above.
+
 ## How it works
 
 *(keep your existing 5-step Align/Detect/Track/Filter/Cross-match section as-is)*
