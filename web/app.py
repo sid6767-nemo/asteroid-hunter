@@ -154,11 +154,8 @@ def hunt_latest():
     """Home-page entry: open THIS BROWSER'S own most recent upload if it
     remembers one (via cookie). Never silently substitutes someone else's
     session or the bundled set203 sample without saying so."""
-    own_sid = request.cookies.get('last_hunt_sid')
-    if own_sid and os.path.exists(os.path.join(RESULTS_DIR, f'{own_sid}_hunt.json')):
-        return redirect(f'/hunt/{own_sid}')
-    # no upload from this browser yet -> send them to import first.
-    # hunt-by-ear runs on YOUR field; it never falls back to a canned dataset.
+    # Always start with an import. Hunt-by-ear runs on YOUR field - it never
+    # opens a canned dataset, and never silently resumes an old session.
     return redirect(url_for('detect', mode='hunt'))
 
 
