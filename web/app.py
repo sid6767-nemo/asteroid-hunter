@@ -37,12 +37,16 @@ def home():
 
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
+    hunt_mode = (request.args.get('mode') == 'hunt'
+                 or request.form.get('mode') == 'hunt')
+
     if request.method == 'GET':
-        return render_template('detect.html')
+        return render_template('detect.html', hunt_mode=hunt_mode)
 
     uploads = request.files.getlist('frames')
     if not uploads or all(not u.filename for u in uploads):
-        return render_template('detect.html', error="Please choose some files first.")
+        return render_template('detect.html', error="Please choose some files first.",
+                               hunt_mode=hunt_mode)
 
     session_id = uuid.uuid4().hex[:8]
     work_dir = os.path.join(UPLOAD_ROOT, session_id)
@@ -118,6 +122,16 @@ def detect():
             error="The pipeline ran but didn't produce a result image. "
                   "Check that your frames are valid FITS images of the same field.")
 
+    hunt_ready = os.path.exists(os.path.join(RESULTS_DIR, f'{session_id}_hunt.json'))
+
+    # hunt mode: straight to the sonification, skipping the results page entirely.
+    # The whole point of hunt-by-ear is finding the movers unaided - showing the
+    # pipeline's answers on the way in would spoil it.
+    if hunt_mode and hunt_ready:
+        resp = make_response(redirect(url_for('hunt', sid=session_id)))
+        resp.set_cookie('last_hunt_sid', session_id, max_age=60 * 60 * 24 * 30)
+        return resp
+
     resp = make_response(render_template('detect.html',
                            result_image=result_image,
                            frame_images=frame_images,
@@ -130,7 +144,7 @@ def detect():
     # remember THIS browser's own upload, so the home-page "Hunt by ear" shortcut
     # finds it - instead of silently falling back to whichever hunt session
     # (possibly the bundled set203 sample) happens to have the newest file on disk
-    if os.path.exists(os.path.join(RESULTS_DIR, f'{session_id}_hunt.json')):
+    if hunt_ready:
         resp.set_cookie('last_hunt_sid', session_id, max_age=60 * 60 * 24 * 30)
     return resp
 
@@ -145,7 +159,7 @@ def hunt_latest():
         return redirect(f'/hunt/{own_sid}')
     # no upload from this browser yet -> send them to import first.
     # hunt-by-ear runs on YOUR field; it never falls back to a canned dataset.
-    return redirect(url_for('detect'))
+    return redirect(url_for('detect', mode='hunt'))
 
 
 @app.route('/hunt/<sid>')

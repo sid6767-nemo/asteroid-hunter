@@ -56,18 +56,24 @@
     <a class="back" href="{{ url_for('home') }}">← back</a>
     <h1>Upload your frames</h1>
     <p class="tagline">
+      {% if hunt_mode %}
+      Choose 3–10 telescope frames of the same patch of sky (or a .zip of them),
+      then hunt them by ear. 4 or more frames gives the cleanest results.
+      {% else %}
       Choose 3–10 telescope frames of the same patch of sky (or a .zip of them),
       then run the detector. 4 or more frames gives the cleanest results.
+      {% endif %}
     </p>
 
     <form method="POST" enctype="multipart/form-data" class="uploader" onsubmit="showLoading()">
       <input type="file" name="frames" multiple accept=".fits,.zip">
-      <button type="submit" class="button">Detect</button>
+      {% if hunt_mode %}<input type="hidden" name="mode" value="hunt">{% endif %}
+      <button type="submit" class="button">{% if hunt_mode %}Hunt by ear 🔊{% else %}Detect{% endif %}</button>
     </form>
 
     <div id="loading" class="loading" style="display:none;">
       <div class="spinner"></div>
-      <p>Running detection… this can take 1–2 minutes. Please don't close the tab.</p>
+      <p>{% if hunt_mode %}Preparing your frames for the hunt… this can take 1–2 minutes. Please don't close the tab.{% else %}Running detection… this can take 1–2 minutes. Please don't close the tab.{% endif %}</p>
     </div>
 
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
