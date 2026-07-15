@@ -143,6 +143,8 @@
 
         function apply() {
           const t = `translate(${tx}px, ${ty}px) scale(${scale})`;
+          img.style.transformOrigin = '0 0';           // required for cursor-anchored zoom math
+          hotLayer.style.transformOrigin = '0 0';
           img.style.transform = t;
           hotLayer.style.transform = t;
           hotLayer.querySelectorAll('.hotspot').forEach(d => {
@@ -215,20 +217,40 @@
         document.getElementById('prevBtn').onclick = () => { pause(); show(idx - 1); };
         document.getElementById('nextBtn').onclick = () => { pause(); show(idx + 1); };
         document.getElementById('speed').oninput = () => { if (playing) play(); };
-        document.getElementById('zoomIn').onclick  = () => { scale *= 1.3; apply(); };
-        document.getElementById('zoomOut').onclick = () => { scale = Math.max(1, scale / 1.3); apply(); };
+        /* zoom anchored on a point: keeps whatever image content is under
+         * (localX, localY) - position relative to the image's untransformed
+         * top-left - fixed on screen as scale changes to newScale. */
+        function zoomAt(localX, localY, newScale) {
+          newScale = Math.max(1, Math.min(newScale, 12));
+          const lx = (localX - tx) / scale, ly = (localY - ty) / scale;
+          tx = localX - lx * newScale; ty = localY - ly * newScale;
+          scale = newScale;
+          if (scale === 1) { tx = 0; ty = 0; }
+          apply();
+        }
+        function viewerCenter() {
+          const r = viewer.getBoundingClientRect();
+          return { x: r.width / 2 - img.offsetLeft, y: r.height / 2 - img.offsetTop };
+        }
+        document.getElementById('zoomIn').onclick  = () => { const c = viewerCenter(); zoomAt(c.x, c.y, scale * 1.3); };
+        document.getElementById('zoomOut').onclick = () => { const c = viewerCenter(); zoomAt(c.x, c.y, scale / 1.3); };
         document.getElementById('resetBtn').onclick = () => { scale = 1; tx = 0; ty = 0; apply(); };
         document.getElementById('fsBtn').onclick = () => {
           if (!document.fullscreenElement) viewer.requestFullscreen();
           else document.exitFullscreen();
         };
-        // scroll to zoom
+        // Pinch-to-zoom vs two-finger scroll: browsers tag a real pinch/zoom
+        // gesture (even from a trackpad) with ctrlKey=true on the wheel event -
+        // that's not a person holding Ctrl, it's how Chrome/Firefox report a
+        // pinch. A plain two-finger scroll has ctrlKey=false. Only the pinch
+        // case zooms the image; a plain scroll is left alone to scroll the page.
         viewer.addEventListener('wheel', (e) => {
+          if (!e.ctrlKey) return;                       // plain scroll: let the page handle it
           e.preventDefault();
-          scale *= (e.deltaY < 0) ? 1.15 : 0.87;
-          scale = Math.max(1, Math.min(scale, 12));
-          if (scale === 1) { tx = 0; ty = 0; }
-          apply();
+          const rect = viewer.getBoundingClientRect();
+          const localX = (e.clientX - rect.left) - img.offsetLeft;
+          const localY = (e.clientY - rect.top) - img.offsetTop;
+          zoomAt(localX, localY, scale * ((e.deltaY < 0) ? 1.15 : 0.87));
         }, { passive: false });
         // drag to pan
         viewer.addEventListener('mousedown', (e) => { dragging = true; sx = e.clientX - tx; sy = e.clientY - ty; });

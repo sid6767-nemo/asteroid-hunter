@@ -13,7 +13,8 @@ import glob
 import shutil
 import zipfile
 import subprocess
-from flask import Flask, jsonify, render_template, request, url_for
+from flask import Flask, jsonify, render_template, request, url_for, make_response, redirect
+
 
 app = Flask(__name__)
 
@@ -117,7 +118,7 @@ def detect():
             error="The pipeline ran but didn't produce a result image. "
                   "Check that your frames are valid FITS images of the same field.")
 
-    return render_template('detect.html',
+    resp = make_response(render_template('detect.html',
                            result_image=result_image,
                            frame_images=frame_images,
                            candidates=candidates,
@@ -125,22 +126,27 @@ def detect():
                            n_frames=n,
                            soundfield_url=soundfield_url,
                            backdrop_url=backdrop_url,
-                           session_id=session_id)
+                           session_id=session_id))
+    # remember THIS browser's own upload, so the home-page "Hunt by ear" shortcut
+    # finds it - instead of silently falling back to whichever hunt session
+    # (possibly the bundled set203 sample) happens to have the newest file on disk
+    if os.path.exists(os.path.join(RESULTS_DIR, f'{session_id}_hunt.json')):
+        resp.set_cookie('last_hunt_sid', session_id, max_age=60 * 60 * 24 * 30)
+    return resp
 
 
 @app.route('/hunt')
 def hunt_latest():
-    """Home-page entry: open the most recent hunt session (newest upload
-    that produced hunt data), falling back to the bundled set203 sample."""
-    from flask import redirect
-    metas = glob.glob(os.path.join(RESULTS_DIR, '*_hunt.json'))
-    if metas:
-        newest = max(metas, key=os.path.getmtime)
-        sid = os.path.basename(newest)[:-len('_hunt.json')]
-        return redirect(f'/hunt/{sid}')
+    """Home-page entry: open THIS BROWSER'S own most recent upload if it
+    remembers one (via cookie). Never silently substitutes someone else's
+    session or the bundled set203 sample without saying so."""
+    own_sid = request.cookies.get('last_hunt_sid')
+    if own_sid and os.path.exists(os.path.join(RESULTS_DIR, f'{own_sid}_hunt.json')):
+        return redirect(f'/hunt/{own_sid}')
     return render_template('hunt.html', sid=None,
-                           error="No hunt data yet. Import your images first — "
-                                 "detection saves hunt frames automatically."), 404
+                           error="No hunt data from this browser yet. Import your own "
+                                 "images first — detection saves hunt frames "
+                                 "automatically, then Hunt by ear will open YOUR field."), 404
 
 
 @app.route('/hunt/<sid>')

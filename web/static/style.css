@@ -149,3 +149,6 @@ h3 { margin:1.5rem 0 .5rem; font-size:1.1rem; }
 .sn-hit{padding:.4rem 0;border-bottom:1px solid #1a2238;color:#7ee0a5}
 .sn-hit:last-child{border-bottom:none}
 .sn-miss{color:#ffd24d;display:block;margin-top:.5rem}
+/* hunt-by-ear commit tiers: color the log entry by confidence band */
+.hit-candidate{color:#7ee0a5}       /* bright green: real candidate */
+.hit-maybe{color:#e0c46a}           /* amber: low-confidence, needs blink-verify */

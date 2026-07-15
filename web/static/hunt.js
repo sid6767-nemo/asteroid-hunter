@@ -68,10 +68,61 @@
     return [v * Math.cos(a), v * Math.sin(a)];
   }
 
+  /* Giant-star rejection zones: same idea as the main pipeline's bright-star
+   * exclusion (see exp_set203_pipeline.py: SATURATION_LEVEL + giant_zones).
+   * Bright stars leave big residuals after alignment (diffraction spikes,
+   * imperfect subtraction), and roam's ~8640-velocity search can find a
+   * velocity where those residuals happen to line up, scoring artifact
+   * "detections" higher than real faint asteroids. The pipeline masks these
+   * zones out; the hunt score engine did not - this brings it in line.
+   * Threshold and radius are the pipeline's own formula (img_median + 200*sigma,
+   * radius = max(180, 10*sqrt(size))), scaled from unbinned to binned pixels. */
+  let GIANT_ZONES = [];
+  function buildGiantZones(STATIC, W, H, binf) {
+    const vals = [];
+    for (let i = 0; i < STATIC.length; i++) if (!isNaN(STATIC[i])) vals.push(STATIC[i]);
+    const med = median(vals);
+    const mad = median(vals.map(v => Math.abs(v - med)));
+    const sigma = Math.max(1e-6, 1.4826 * mad);
+    const threshold = med + 200 * sigma;              // pipeline's SATURATION_LEVEL
+
+    const visited = new Uint8Array(STATIC.length);
+    const AREA_MIN = Math.max(1, Math.ceil(150 / (binf * binf)));   // pipeline: 150 (unbinned px)
+    GIANT_ZONES = [];
+    for (let start = 0; start < STATIC.length; start++) {
+      if (visited[start] || !(STATIC[start] > threshold)) continue;
+      // flood-fill this bright blob (4-connected) to find its full extent
+      const stack = [start]; visited[start] = 1;
+      let sx = 0, sy = 0, count = 0;
+      while (stack.length) {
+        const i = stack.pop();
+        const px = i % W, py = (i / W) | 0;
+        sx += px; sy += py; count++;
+        const nbrs = [i - 1, i + 1, i - W, i + W];
+        for (const ni of nbrs) {
+          if (ni < 0 || ni >= STATIC.length || visited[ni]) continue;
+          if (Math.abs((ni % W) - px) > 1) continue;    // guard row-wrap on i-1/i+1
+          if (STATIC[ni] > threshold) { visited[ni] = 1; stack.push(ni); }
+        }
+      }
+      if (count >= AREA_MIN) {
+        const cx = sx / count, cy = sy / count;
+        const r = Math.max(180 / binf, 10 * Math.sqrt(count));    // pipeline's radius formula
+        GIANT_ZONES.push([cx, cy, r]);
+      }
+    }
+  }
+  function inGiantZone(x, y) {
+    for (const [cx, cy, r] of GIANT_ZONES)
+      if (Math.hypot(x - cx, y - cy) < r) return true;
+    return false;
+  }
+
   /* min-over-frames core signal along a track, in LOCAL noise units, with the
    * consistency factor (asteroid brightness is ~constant over an hour; junk
    * tracks stitched from unrelated residuals are wildly inconsistent). */
   function rawS(x, y, vxDay, vyDay) {
+    if (inGiantZone(x, y)) return { s: 0, patches: null };   // bright-star zone: refuse
     const cs = [], patches = [];
     for (let k = 0; k < NF; k++) {
       const cx = x + vxDay * T[k], cy = y + vyDay * T[k];
@@ -149,8 +200,8 @@
       BANK_VX[i] = v[0]; BANK_VY[i] = v[1]; BANK_SP[i] = s; BANK_AN[i] = a; i++;
     }
   }
-
-  function bank(x, y) {
+function bank(x, y) {
+    if (inGiantZone(x, y)) return new Float32Array(NBANK);   // bright-star zone: all-zero, skip the sweep
     const minC = new Float32Array(NBANK).fill(Infinity);
     const sum = new Float32Array(NBANK), sum2 = new Float32Array(NBANK);
     const nOK = new Uint8Array(NBANK);
@@ -239,6 +290,7 @@
     // things that sit still (stars). Subtracting it leaves only movers+noise.
     const n = W * H, vals = new Float32Array(NF);
     DIFF = frames.map(() => new Float32Array(n));
+    const STATIC = new Float32Array(n).fill(NaN);   // per-pixel median: the frozen stars
     for (let i = 0; i < n; i++) {
       let m = 0;
       for (let k = 0; k < NF; k++) { const v = frames[k][i]; if (!isNaN(v)) vals[m++] = v; }
@@ -248,8 +300,12 @@
         const h2 = m >> 1;
         med = m % 2 ? sub[h2] : 0.5 * (sub[h2 - 1] + sub[h2]);
       }
+      STATIC[i] = med;
       for (let k = 0; k < NF; k++) DIFF[k][i] = frames[k][i] - med;   // NaN propagates
     }
+    onProgress('Finding bright stars to exclude…');
+    await new Promise(r => setTimeout(r, 30));
+    buildGiantZones(STATIC, W, H, BINF);
     // per-frame robust noise of the differenced data (1.4826 * MAD),
     // estimated from a pixel sample for speed
     SIG = [];
@@ -405,13 +461,22 @@
     if (handled) { e.preventDefault(); requestEval(); draw(); }
   });
 
-  /* commit: the ONLY place the pipeline's answers are consulted */
+  /* commit: the ONLY place the pipeline's answers are consulted.
+   * Three-band verdicts based on our measured empty-sky floor (~0.30):
+   *   score < FLOOR_MIN     -> noise, refuse to log anything
+   *   FLOOR_MIN..FLOOR_MAX  -> "maybe" band, amber commit, cautious wording
+   *   score >= FLOOR_MAX    -> real candidate, green commit, confident wording */
+  const FLOOR_MIN = 0.35;                    // must beat empty-sky noise floor
+  const FLOOR_MAX = 0.45;                    // 2002 QK157 scored 0.46 - real recovery
   async function commit() {
     const g = { x: cx, y: cy, speed: evalOut.speed, angle: evalOut.angle, score: evalOut.score };
-    if (g.score <= 0.05) {
-      say('Nothing is tracking here. Score ' + g.score.toFixed(2) + '. Keep hunting.', true);
-      return;
+    if (g.score < FLOOR_MIN) {
+      say('Below the noise floor. Score ' + g.score.toFixed(2) +
+          '. Nothing detectable here - keep hunting.', true);
+      return;                                // no circle, no log entry
     }
+    const band = g.score < FLOOR_MAX ? 'maybe' : 'candidate';
+
     let cands = null;
     try { cands = await (await fetch(base + '_results.json')).json(); } catch (e) { /* offline is fine */ }
     let verdict;
@@ -419,30 +484,33 @@
       let best = null, bestD = 1e9;
       for (const c of cands) {
         if (!c.fpos) continue;
-        const px = c.fpos[0][0] * W * BINF / BINF, py = c.fpos[0][1] * H;  // fpos is fractional
         const d = Math.hypot(c.fpos[0][0] * W - g.x, c.fpos[0][1] * H - g.y);
         if (d < bestD) { bestD = d; best = c; }
       }
       const speedOK = best && Math.abs(best.rate - g.speed) / best.rate < 0.2;
       if (best && bestD < 6 && speedOK) {
-        const who = best.name || ('candidate #' + best.id + ', not in the catalog — possibly undiscovered');
+        const who = best.name || ('candidate #' + best.id + ', not in the catalog - possibly undiscovered');
         verdict = 'Confirmed! You detected ' + who + ', moving ' + best.rate +
                   ' arcseconds per day. The pipeline agrees with your track.';
       } else if (best && bestD < 6) {
         verdict = 'You are on a real object, but your speed (' + g.speed.toFixed(0) +
                   ') differs from the pipeline\'s (' + best.rate + '). Tune it and commit again.';
+      } else if (band === 'maybe') {
+        verdict = 'Low-confidence candidate. Score ' + g.score.toFixed(2) +
+                  ' is above the noise floor but below the reliable-detection threshold. ' +
+                  'Could be a very faint real object - or an artifact. Blink to verify.';
       } else {
-        verdict = 'The pipeline has no object here, but your stack score is ' +
-                  g.score.toFixed(2) + '. It could be real — the pipeline does miss things — ' +
-                  'or a subtle artifact. Check it in the blink viewer.';
+        verdict = 'Candidate at score ' + g.score.toFixed(2) +
+                  '. Above threshold and unclaimed by the pipeline - a real recovery candidate. ' +
+                  'Blink to verify.';
       }
     } else {
-      verdict = 'Committed at score ' + g.score.toFixed(2) + '. No pipeline results are ' +
-                'available to compare against.';
+      verdict = 'Committed at score ' + g.score.toFixed(2) + '. No pipeline results to compare against.';
     }
+    g.band = band;                           // stored so draw() can color the circle
     commits.push(g);
     const div = document.createElement('div');
-    div.className = 'hit';
+    div.className = 'hit hit-' + band;       // CSS colors it by band
     div.textContent = 'x=' + g.x.toFixed(0) + ' y=' + g.y.toFixed(0) + ' · ' +
                       g.speed.toFixed(0) + '"/day @ ' + g.angle.toFixed(1) + '° · score ' +
                       g.score.toFixed(2) + ' — ' + verdict;
@@ -468,7 +536,7 @@
     const pulseRate = 2 + 12 * Math.min(1, evalOut.conc / 0.5);
     const pulse = 0.65 + 0.35 * Math.sin(t * pulseRate * 6.28);
     const duck = (synth && synth.speaking) ? 0.3 : 1.0;
-    gain.gain.setTargetAtTime(cur * cur * 0.4 * (cur > 0.04 ? pulse : 1) * duck, t, 0.03);
+    gain.gain.setTargetAtTime(cur * 0.5 * (cur > 0.04 ? pulse : 1) * duck, t, 0.03);
     osc.frequency.setTargetAtTime(220 + cur * 660, t, 0.03);
   }
 
