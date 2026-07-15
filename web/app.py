@@ -143,10 +143,9 @@ def hunt_latest():
     own_sid = request.cookies.get('last_hunt_sid')
     if own_sid and os.path.exists(os.path.join(RESULTS_DIR, f'{own_sid}_hunt.json')):
         return redirect(f'/hunt/{own_sid}')
-    return render_template('hunt.html', sid=None,
-                           error="No hunt data from this browser yet. Import your own "
-                                 "images first — detection saves hunt frames "
-                                 "automatically, then Hunt by ear will open YOUR field."), 404
+    # no upload from this browser yet -> send them to import first.
+    # hunt-by-ear runs on YOUR field; it never falls back to a canned dataset.
+    return redirect(url_for('detect'))
 
 
 @app.route('/hunt/<sid>')
