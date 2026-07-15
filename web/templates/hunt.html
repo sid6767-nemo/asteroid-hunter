@@ -59,7 +59,9 @@
     <div style="text-align:center">
       <div id="huntStage" tabindex="0" role="application"
            aria-label="Sky field. Arrow keys move, Tab toggles roam and tune, bracket keys change speed, semicolon and quote change direction, Enter commits.">
-        <img id="huntSky" src="{{ url_for('static', filename='results/' + sid + '_backdrop.jpg') }}"
+        <img id="huntSky"
+             src="{{ url_for('static', filename='results/' + sid + '_backdrop.jpg') }}"
+             onerror="this.onerror=null; this.src='{{ url_for('static', filename='results/' + sid + '_frame1.png') }}';"
              alt="Telescope field. Hunt it by sound.">
         <canvas id="huntOv" aria-hidden="true"></canvas>
       </div>
