@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review · Asteroid Hunter</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; }
+  .review-list { list-style: none; padding: 0; max-width: 720px; margin: 0 auto; }
+  .review-item { border-left: 4px solid #444; padding: .8rem 1rem; margin: 0 0 1rem 0;
+    border-radius: 6px; background: #12172a; }
+  .review-item.matched { border-color: #5ee0a0; }
+  .review-item.candidate { border-color: #7ee0a5; }
+  .review-item.maybe { border-color: #e0c46a; }
+  .review-item.noise { border-color: #555; opacity: .7; }
+  .review-item h3 { margin: 0 0 .3rem 0; }
+  .review-item p { margin: .2rem 0; color: #b9c2d8; }
+  .blink-frame { max-width: 100%; border-radius: 6px; }
+  .blink-controls { text-align: center; margin: .5rem 0; }
+  .empty-state { text-align: center; color: #b9c2d8; margin: 3rem 0; }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <a class="back" href="/hunt/{{ sid }}">← back to hunting</a>
+    <h1>Your results</h1>
+    <div id="reviewLive" class="visually-hidden" aria-live="polite"></div>
+
+    {% if error %}
+      <p class="empty-state">{{ error }}</p>
+    {% elif candidates|length == 0 %}
+      <p class="empty-state">You finished hunting without marking any candidates.
+        <a href="/hunt/{{ sid }}">Go back and hunt some more</a>, or
+        <a href="{{ url_for('detect', mode='hunt') }}">start a new field</a>.</p>
+    {% else %}
+      <p class="tagline">
+        {{ candidates|length }} candidate{{ 's' if candidates|length != 1 else '' }} confirmed.
+        {{ candidates|selectattr('matched')|list|length }} matched a known object in the catalog.
+      </p>
+
+      <ol class="review-list">
+        {% for c in candidates %}
+        <li class="review-item {{ 'matched' if c.matched else c.band }}">
+          <h3>Candidate {{ loop.index }}
+            {% if c.matched %} — {{ c.name or 'matches a known object' }}{% endif %}
+          </h3>
+          <p>Position ({{ c.x }}, {{ c.y }}) · {{ c.speed }}"/day at {{ c.angle }}°
+             · hunt score {{ c.score }}</p>
+          {% if c.matched %}
+            <p>Confirmed: this matches {{ c.name or 'a cataloged object' }} in the pipeline's
+               results, moving {{ c.catalog_speed }}"/day. Your track agrees with the catalog.</p>
+          {% elif c.band == 'candidate' %}
+            <p>Not in the catalog. Score is above the reliable-detection threshold — a real
+               recovery candidate. Blink the frames below to verify by eye, or share this
+               position for follow-up.</p>
+          {% elif c.band == 'maybe' %}
+            <p>Not in the catalog. Score is above the noise floor but below the reliable
+               threshold — could be a very faint real object, could be an artifact.</p>
+          {% else %}
+            <p>Below the measured noise floor. Likely not real.</p>
+          {% endif %}
+          {% if c.weak_frame_count > 0 %}
+            <p>{{ c.weak_frame_count }} of {{ c.n_frames }} individual frames were much
+               fainter than the combined signal — expected for a faint object that only the
+               4-frame stack can reveal. Per-frame values: {{ c.per_frame|join(', ') }}.</p>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ol>
+
+      <h2 class="visually-hidden">Blink viewer</h2>
+      <div class="blink-controls" role="group" aria-label="Blink through the frames">
+        <button id="blinkPrev">← previous frame</button>
+        <span id="blinkLabel">Frame 1 of 4</span>
+        <button id="blinkNext">next frame →</button>
+      </div>
+      <div style="text-align:center">
+        <img id="blinkImg" class="blink-frame"
+             src="{{ url_for('static', filename='results/' + sid + '_frame1.png') }}"
+             alt="Telescope frame 1">
+      </div>
+    {% endif %}
+  </main>
+
+<script>
+(function () {
+  var candidates = {{ candidates|tojson }};
+  var live = document.getElementById('reviewLive');
+  var synth = window.speechSynthesis;
+
+  function say(text) {
+    live.textContent = text;
+    if (!synth) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.98;
+    synth.speak(u);
+  }
+
+  // Spoken-first summary on load - this page is built for a blind user first,
+  // sighted second. The blink viewer below is the sighted companion, not a
+  // replacement for this.
+  if (candidates.length === 0) {
+    say('You finished hunting without marking any candidates. Go back to hunt more, ' +
+        'or start a new field.');
+  } else {
+    var matched = candidates.filter(function (c) { return c.matched; }).length;
+    var parts = [candidates.length + ' candidate' + (candidates.length === 1 ? '' : 's') +
+                 ' confirmed. ' + matched + ' matched a known object in the catalog.'];
+    candidates.forEach(function (c, i) {
+      var line = 'Candidate ' + (i + 1) + ': ';
+      if (c.matched) {
+        line += 'confirmed as ' + (c.name || 'a known object') + ', moving ' +
+                c.catalog_speed + ' arcseconds per day. Your track agrees with the catalog.';
+      } else if (c.band === 'candidate') {
+        line += 'not in the catalog, score ' + c.score + ', above the reliable threshold. ' +
+                'A real recovery candidate.';
+      } else if (c.band === 'maybe') {
+        line += 'not in the catalog, score ' + c.score + ', a low confidence candidate.';
+      } else {
+        line += 'below the noise floor, likely not real.';
+      }
+      if (c.weak_frame_count > 0) {
+        line += ' ' + c.weak_frame_count + ' of ' + c.n_frames + ' individual frames were ' +
+                'much fainter than the combined signal - expected for a faint object.';
+      }
+      parts.push(line);
+    });
+    say(parts.join(' '));
+  }
+
+  // sighted companion: simple blink viewer over the same session's frames
+  var blinkImg = document.getElementById('blinkImg');
+  var blinkLabel = document.getElementById('blinkLabel');
+  var sid = {{ sid|tojson }};
+  var frame = 1, NF = 4;
+  function updateBlink() {
+    if (!blinkImg) return;
+    blinkImg.src = '/static/results/' + sid + '_frame' + frame + '.png';
+    blinkImg.alt = 'Telescope frame ' + frame;
+    blinkLabel.textContent = 'Frame ' + frame + ' of ' + NF;
+  }
+  var prevBtn = document.getElementById('blinkPrev'), nextBtn = document.getElementById('blinkNext');
+  if (prevBtn) prevBtn.onclick = function () { frame = frame > 1 ? frame - 1 : NF; updateBlink(); };
+  if (nextBtn) nextBtn.onclick = function () { frame = frame < NF ? frame + 1 : 1; updateBlink(); };
+})();
+</script>
+</body>
+</html>

@@ -174,6 +174,77 @@ def hunt(sid):
     return render_template('hunt.html', sid=sid, error=None)
 
 
+@app.route('/hunt/<sid>/review', methods=['POST'])
+def hunt_review(sid):
+    """After a hunting session ends (Enter), match every user-confirmed
+    candidate against the pipeline's catalog results - the SAME distance +
+    speed rule the old in-page commit() used, just server-side now that a
+    whole session's candidates arrive at once. This is still the only place
+    the pipeline's answers are consulted; nothing here was visible while
+    hunting."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', sid):
+        return render_template('review.html', sid=None, candidates=[],
+                               error='Invalid session id.'), 404
+
+    hunt_meta_path = os.path.join(RESULTS_DIR, f'{sid}_hunt.json')
+    if not os.path.exists(hunt_meta_path):
+        return render_template('review.html', sid=None, candidates=[],
+                               error='No hunt data for this session.'), 404
+    with open(hunt_meta_path) as f:
+        meta = json.load(f)
+    W, H = meta['width'], meta['height']
+
+    try:
+        raw = json.loads(request.form.get('candidates', '[]'))
+    except (ValueError, TypeError):
+        raw = []
+
+    results_path = os.path.join(RESULTS_DIR, f'{sid}_results.json')
+    catalog = []
+    if os.path.exists(results_path):
+        with open(results_path) as f:
+            catalog = json.load(f)
+
+    FLOOR_MIN, FLOOR_MAX = 0.35, 0.45   # same measured bands as the hunt page
+    enriched = []
+    for c in raw:
+        x, y = c.get('x', 0), c.get('y', 0)
+        speed, angle = c.get('speed', 0), c.get('angle', 0)
+        score = c.get('huntScore', 0)
+        per_frame = c.get('perFrame', [])
+
+        best, best_d = None, 1e9
+        for cand in catalog:
+            fpos = cand.get('fpos')
+            if not fpos:
+                continue
+            d = ((fpos[0][0] * W - x) ** 2 + (fpos[0][1] * H - y) ** 2) ** 0.5
+            if d < best_d:
+                best, best_d = cand, d
+        speed_ok = best and best.get('rate') and abs(best['rate'] - speed) / best['rate'] < 0.2
+        matched = bool(best and best_d < 6 and speed_ok)
+
+        # honesty check: did per-frame confirmation actually hold up, or was
+        # it (correctly) too faint to confirm alone in every single frame?
+        valid_frames = [v for v in per_frame if v is not None]
+        weak_frames = sum(1 for v in valid_frames if v < score * 0.3)
+
+        enriched.append({
+            'x': round(x), 'y': round(y),
+            'speed': round(speed), 'angle': round(angle, 1),
+            'score': round(score, 3),
+            'band': 'candidate' if score >= FLOOR_MAX else ('maybe' if score >= FLOOR_MIN else 'noise'),
+            'matched': matched,
+            'name': (best.get('name') if matched else None),
+            'catalog_speed': (best.get('rate') if best else None),
+            'per_frame': [round(v, 2) if v is not None else None for v in per_frame],
+            'weak_frame_count': weak_frames,
+            'n_frames': len(per_frame),
+        })
+
+    return render_template('review.html', sid=sid, candidates=enriched, error=None)
+
+
 _SPEC_CACHE = {}
 
 

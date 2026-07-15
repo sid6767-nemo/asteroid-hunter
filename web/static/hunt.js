@@ -359,18 +359,57 @@ function bank(x, y) {
   };
 
   /* state */
-  let started = false, mode = 'roam';            // 'roam' | 'tune'
+  let started = false, mode = 'roam';            // 'roam' | 'tune' (aiming, while hunting)
+  let session = 'hunting';                       // 'hunting' | 'confirming'
   let cx = 0, cy = 0;                            // cursor, binned px
   let tuneSpeed = 400, tuneAngle = 90;           // manual velocity in tune mode
   let evalOut = { score: 0, conc: 0, speed: 0, angle: 0 };
   let needEval = false, lastEval = 0;
   let cur = 0;                                   // smoothed audio level
   let ac = null, osc = null, gain = null;
-  let commits = [];
+  let confirmed = [];                            // finalized, per-frame-confirmed candidates
+  // a candidate mid-confirmation: {x, y, speed, angle, huntScore, perFrame: []}
+  let pending = null;
+  let confirmFrame = 0;                          // which of the NF frames we're checking (0-indexed)
+  const FLOOR_MIN = 0.35;                        // must beat the measured empty-sky floor to confirm
 
   function requestEval() { needEval = true; }
 
+  /* single-frame signal at (x, y) in frame k ALONE - no velocity projection,
+   * no stacking with the other frames. This is the honest per-frame check:
+   * would this object be audible if you only had THIS ONE exposure? (Real
+   * faint recoveries like a V22.5 asteroid may fail this on every frame -
+   * that is expected, not a mistake; the combined roam score is what caught
+   * them, and per-frame confirmation is easiest on the pipeline's own
+   * brighter, already-confirmed finds.) */
+  function frameSignalAt(k, x, y) {
+    const p = new Float32Array(N_PATCH);
+    let coreBad = false;
+    for (let j = 0; j < N_PATCH; j++) {
+      p[j] = bilinear(DIFF[k], x + patchOff[j][0], y + patchOff[j][1]);
+      if (patchIsCore[j] && isNaN(p[j])) coreBad = true;
+    }
+    if (coreBad) return 0;
+    const ann = annOff.map(o => bilinear(DIFF[k], x + o[0], y + o[1]));
+    const b = median(ann);
+    const mad = median(ann.map(v => Math.abs(v - b)));
+    const noise = Math.max(1.4826 * mad, 0.6 * SIG[k]);
+    let sum = 0;
+    for (let j = 0; j < N_PATCH; j++) if (patchIsCore[j]) sum += p[j] - b;
+    return Math.max(0, sum / (noise * N_CORE));
+  }
+
   function evaluate() {
+    if (session === 'confirming') {
+      const s = frameSignalAt(confirmFrame, cx, cy);
+      evalOut = { score: s, conc: 0, speed: pending.speed, angle: pending.angle };
+      readout.textContent =
+        'confirming candidate  ·  frame ' + (confirmFrame + 1) + ' of ' + NF +
+        '  ·  x=' + cx.toFixed(0) + ' y=' + cy.toFixed(0) +
+        '  ·  this frame alone = ' + s.toFixed(2) +
+        '  ·  space bar to confirm this frame';
+      return;
+    }
     if (mode === 'roam') {
       evalOut = roamVerified(cx, cy);
     } else {
@@ -382,7 +421,8 @@ function bank(x, y) {
       mode + '  ·  x=' + cx.toFixed(0) + ' y=' + cy.toFixed(0) +
       '  ·  score=' + evalOut.score.toFixed(3) +
       '  ·  ' + (mode === 'roam' ? 'best track ' : '') +
-      evalOut.speed.toFixed(0) + '"/day @ ' + evalOut.angle.toFixed(1) + '°';
+      evalOut.speed.toFixed(0) + '"/day @ ' + evalOut.angle.toFixed(1) + '°  ' +
+      '·  space bar to mark a candidate  ·  enter to finish hunting';
   }
 
   /* canvas overlay */
@@ -395,12 +435,19 @@ function bank(x, y) {
     if (!Wc) return;
     octx.clearRect(0, 0, Wc, Hc);
     const x = cx / W * Wc, y = cy / H * Hc;
-    for (const c of commits) {
+    for (const c of confirmed) {
       const px = c.x / W * Wc, py = c.y / H * Hc;
       octx.strokeStyle = '#5ee0a0'; octx.lineWidth = 1.6;
       octx.beginPath(); octx.arc(px, py, 9, 0, 7); octx.stroke();
     }
-    octx.strokeStyle = mode === 'roam' ? '#fff' : '#ffd24d';
+    if (pending) {                                  // candidate mid-confirmation
+      const px = pending.x / W * Wc, py = pending.y / H * Hc;
+      octx.strokeStyle = '#ffd24d'; octx.lineWidth = 1.6;
+      octx.setLineDash([3, 3]);
+      octx.beginPath(); octx.arc(px, py, 11, 0, 7); octx.stroke();
+      octx.setLineDash([]);
+    }
+    octx.strokeStyle = session === 'confirming' ? '#ffd24d' : (mode === 'roam' ? '#fff' : '#ffd24d');
     octx.globalAlpha = .8; octx.lineWidth = 2;
     octx.beginPath(); octx.arc(x, y, 12, 0, 7); octx.stroke();
     octx.beginPath();
@@ -435,90 +482,114 @@ function bank(x, y) {
       case 'ArrowRight': cx = Math.min(W - 1, cx + (big ? 16 : 3)); break;
       case 'ArrowUp':    cy = Math.max(0, cy - (big ? 16 : 3)); break;
       case 'ArrowDown':  cy = Math.min(H - 1, cy + (big ? 16 : 3)); break;
-      case 'Tab':
-        mode = mode === 'roam' ? 'tune' : 'roam';
-        if (mode === 'tune' && evalOut.speed > 0) {
-          tuneSpeed = evalOut.speed; tuneAngle = evalOut.angle;   // seed from pixels
-        }
-        say(mode === 'roam' ? 'Roam mode' : 'Tune mode. Speed ' +
-            tuneSpeed.toFixed(0) + ' arcseconds per day, heading ' +
-            tuneAngle.toFixed(0) + ' degrees.', true);
-        break;
-      case '[': tuneSpeed = Math.max(SPEED_MIN, tuneSpeed - (big ? 5 : 25)); break;
-      case ']': tuneSpeed = Math.min(SPEED_MAX, tuneSpeed + (big ? 5 : 25)); break;
-      case ';': tuneAngle = (tuneAngle - (big ? 0.5 : 2) + 360) % 360; break;
-      case "'": tuneAngle = (tuneAngle + (big ? 0.5 : 2)) % 360; break;
-      case 'v': case 'V':
-        say('Speed ' + evalOut.speed.toFixed(0) + ' arcseconds per day, heading ' +
-            evalOut.angle.toFixed(0) + ' degrees.', true);
+      case ' ':
+        if (session === 'hunting') markCandidate(); else confirmFrameStep();
         break;
       case 'p': case 'P':
         say('Position ' + cx.toFixed(0) + ', ' + cy.toFixed(0) + ' of ' + W + ' by ' + H + '.', true);
         break;
-      case 'Enter': commit(); break;
-      default: handled = false;
+      case 'Enter':
+        if (session === 'hunting') finishHunting();
+        else say('Finish confirming this candidate first - press space to continue.', true);
+        break;
+      default:
+        if (session === 'hunting') {
+          switch (e.key) {
+            case 'Tab':
+              mode = mode === 'roam' ? 'tune' : 'roam';
+              if (mode === 'tune' && evalOut.speed > 0) {
+                tuneSpeed = evalOut.speed; tuneAngle = evalOut.angle;   // seed from pixels
+              }
+              say(mode === 'roam' ? 'Roam mode' : 'Tune mode. Speed ' +
+                  tuneSpeed.toFixed(0) + ' arcseconds per day, heading ' +
+                  tuneAngle.toFixed(0) + ' degrees.', true);
+              break;
+            case '[': tuneSpeed = Math.max(SPEED_MIN, tuneSpeed - (big ? 5 : 25)); break;
+            case ']': tuneSpeed = Math.min(SPEED_MAX, tuneSpeed + (big ? 5 : 25)); break;
+            case ';': tuneAngle = (tuneAngle - (big ? 0.5 : 2) + 360) % 360; break;
+            case "'": tuneAngle = (tuneAngle + (big ? 0.5 : 2)) % 360; break;
+            case 'v': case 'V':
+              say('Speed ' + evalOut.speed.toFixed(0) + ' arcseconds per day, heading ' +
+                  evalOut.angle.toFixed(0) + ' degrees.', true);
+              break;
+            default: handled = false;
+          }
+        } else handled = false;
     }
     if (handled) { e.preventDefault(); requestEval(); draw(); }
   });
 
-  /* commit: the ONLY place the pipeline's answers are consulted.
-   * Three-band verdicts based on our measured empty-sky floor (~0.30):
-   *   score < FLOOR_MIN     -> noise, refuse to log anything
-   *   FLOOR_MIN..FLOOR_MAX  -> "maybe" band, amber commit, cautious wording
-   *   score >= FLOOR_MAX    -> real candidate, green commit, confident wording */
-  const FLOOR_MIN = 0.35;                    // must beat empty-sky noise floor
-  const FLOOR_MAX = 0.45;                    // 2002 QK157 scored 0.46 - real recovery
-  async function commit() {
-    const g = { x: cx, y: cy, speed: evalOut.speed, angle: evalOut.angle, score: evalOut.score };
-    if (g.score < FLOOR_MIN) {
-      say('Below the noise floor. Score ' + g.score.toFixed(2) +
-          '. Nothing detectable here - keep hunting.', true);
-      return;                                // no circle, no log entry
+  /* Space in hunting mode: mark whatever is under the cursor right now as a
+   * candidate, and switch to per-frame confirmation. Refuses below the
+   * measured noise floor, same discipline as the old commit() used. */
+  function markCandidate() {
+    if (evalOut.score < FLOOR_MIN) {
+      say('Nothing above the noise floor here yet - score ' + evalOut.score.toFixed(2) +
+          '. Keep hunting.', true);
+      return;
     }
-    const band = g.score < FLOOR_MAX ? 'maybe' : 'candidate';
-
-    let cands = null;
-    try { cands = await (await fetch(base + '_results.json')).json(); } catch (e) { /* offline is fine */ }
-    let verdict;
-    if (cands && cands.length) {
-      let best = null, bestD = 1e9;
-      for (const c of cands) {
-        if (!c.fpos) continue;
-        const d = Math.hypot(c.fpos[0][0] * W - g.x, c.fpos[0][1] * H - g.y);
-        if (d < bestD) { bestD = d; best = c; }
-      }
-      const speedOK = best && Math.abs(best.rate - g.speed) / best.rate < 0.2;
-      if (best && bestD < 6 && speedOK) {
-        const who = best.name || ('candidate #' + best.id + ', not in the catalog - possibly undiscovered');
-        verdict = 'Confirmed! You detected ' + who + ', moving ' + best.rate +
-                  ' arcseconds per day. The pipeline agrees with your track.';
-      } else if (best && bestD < 6) {
-        verdict = 'You are on a real object, but your speed (' + g.speed.toFixed(0) +
-                  ') differs from the pipeline\'s (' + best.rate + '). Tune it and commit again.';
-      } else if (band === 'maybe') {
-        verdict = 'Low-confidence candidate. Score ' + g.score.toFixed(2) +
-                  ' is above the noise floor but below the reliable-detection threshold. ' +
-                  'Could be a very faint real object - or an artifact. Blink to verify.';
-      } else {
-        verdict = 'Candidate at score ' + g.score.toFixed(2) +
-                  '. Above threshold and unclaimed by the pipeline - a real recovery candidate. ' +
-                  'Blink to verify.';
-      }
-    } else {
-      verdict = 'Committed at score ' + g.score.toFixed(2) + '. No pipeline results to compare against.';
+    pending = { x: cx, y: cy, speed: evalOut.speed, angle: evalOut.angle,
+               huntScore: evalOut.score, perFrame: [] };
+    session = 'confirming';
+    // frame 0's signal is recorded immediately - this space press IS its
+    // confirmation. confirmFrame then means "the frame now on screen,
+    // awaiting ITS confirmation" - so exactly NF total space presses
+    // (this one plus NF-1 more) confirm all NF frames, matching what a
+    // sighted user does clicking through the blink viewer.
+    const s0 = frameSignalAt(0, cx, cy);
+    pending.perFrame[0] = s0;
+    confirmFrame = 1;
+    sky.src = base + '_frame2.png';
+    let msg = 'Candidate marked, frame 1 of ' + NF + ' recorded. Now showing frame 2 of ' + NF +
+              '. Search near this spot for the same object, then press space.';
+    if (s0 < pending.huntScore * 0.3) {
+      msg += ' This one is faint - a single frame may not show it clearly. ' +
+             'That is expected; trust the combined sound you heard while hunting.';
     }
-    g.band = band;                           // stored so draw() can color the circle
-    commits.push(g);
-    const div = document.createElement('div');
-    div.className = 'hit hit-' + band;       // CSS colors it by band
-    div.textContent = 'x=' + g.x.toFixed(0) + ' y=' + g.y.toFixed(0) + ' · ' +
-                      g.speed.toFixed(0) + '"/day @ ' + g.angle.toFixed(1) + '° · score ' +
-                      g.score.toFixed(2) + ' — ' + verdict;
-    log.prepend(div);
-    say(verdict, true);
-    draw();
+    say(msg, true);
   }
-  commitBtn.onclick = commit;
+
+  /* Space while confirming: record the signal for whichever frame is
+   * CURRENTLY on screen, then either show the next frame or finalize once
+   * all NF frames have been confirmed. */
+  function confirmFrameStep() {
+    pending.perFrame[confirmFrame] = frameSignalAt(confirmFrame, cx, cy);
+    confirmFrame++;
+    if (confirmFrame >= NF) {
+      confirmed.push(pending);
+      say('Candidate saved. Candidate number ' + confirmed.length + '. ' +
+          'Keep hunting for more, or press enter to finish.', true);
+      pending = null;
+      session = 'hunting';
+      sky.src = base + '_backdrop.jpg';
+      sky.onerror = () => { sky.onerror = null; sky.src = base + '_frame1.png'; };
+    } else {
+      sky.src = base + '_frame' + (confirmFrame + 1) + '.png';
+      say('Frame ' + (confirmFrame + 1) + ' of ' + NF +
+          '. Search near this spot for the same object, then press space.', true);
+    }
+  }
+
+  /* Enter in hunting mode: the whole session is over. Hand every confirmed
+   * candidate to the server for catalog matching, and open the review page -
+   * this is the ONLY place the pipeline's answers are consulted, same rule
+   * the old commit() followed. */
+  function finishHunting() {
+    say('Finishing. Checking ' + confirmed.length + ' candidate' +
+        (confirmed.length === 1 ? '' : 's') + ' against the catalog.', true);
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/hunt/' + SID + '/review';
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'candidates';
+    inp.value = JSON.stringify(confirmed);
+    form.appendChild(inp);
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  commitBtn.onclick = finishHunting;
+  commitBtn.textContent = 'Finish hunting (Enter)';
 
   /* audio: tone = how strongly a real track sings; pulse rate = how sharply
    * the stack focuses (the "focusing a lens" channel) */
@@ -560,9 +631,14 @@ function bank(x, y) {
     commitBtn.disabled = false;
     cx = W / 2; cy = H / 2;
     sizeCanvas(); stage.focus();
-    status.textContent = 'Hunting. Roam with the mouse or arrows; Tab to tune; Enter to commit.';
-    say('Listening. Move across the field. When something real is moving under your cursor, ' +
-        'you will hear it sing. Nothing is revealed until you commit.', true);
+    status.textContent = 'Hunting. Arrow keys or mouse to move. Space bar to mark a candidate ' +
+      'and confirm it frame by frame. Enter to finish and see your results.';
+    say('Listening. Move across the field with the arrow keys or the mouse. ' +
+        'When something real is under your cursor, you will hear it sing. ' +
+        'Press the space bar to mark it as a candidate - you will then be asked to find the ' +
+        'same object in each of the ' + NF + ' frames, pressing space bar each time. ' +
+        'Press enter at any point to finish hunting and hear your results. ' +
+        'Press P to hear your position, and the speech button to turn narration off.', true);
     requestEval();
     audioLoop();
   };

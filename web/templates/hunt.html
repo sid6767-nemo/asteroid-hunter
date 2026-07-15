@@ -49,7 +49,7 @@
     <div class="hunt-bar">
       <button id="huntStart">Start listening</button>
       <button id="huntSpeech" aria-pressed="true">Speech: on</button>
-      <button id="huntCommit" disabled>Commit guess (Enter)</button>
+      <button id="huntCommit" disabled>Finish hunting (Enter)</button>
     </div>
 
     <div id="huntStatus" role="status"></div>
@@ -58,7 +58,9 @@
 
     <div style="text-align:center">
       <div id="huntStage" tabindex="0" role="application"
-           aria-label="Sky field. Arrow keys move, Tab toggles roam and tune, bracket keys change speed, semicolon and quote change direction, Enter commits.">
+           aria-label="Sky field. Arrow keys move. Space bar marks a candidate and steps through
+                       each frame to confirm it - press space again each time. Tab toggles roam
+                       and tune while hunting. Enter finishes and shows your results.">
         <img id="huntSky"
              src="{{ url_for('static', filename='results/' + sid + '_backdrop.jpg') }}"
              onerror="this.onerror=null; this.src='{{ url_for('static', filename='results/' + sid + '_frame1.png') }}';"
@@ -70,9 +72,12 @@
     <div id="huntLog"></div>
 
     <div class="hunt-keys">
-      <b>Arrows</b> — move (Shift = big steps) &nbsp;·&nbsp; <b>Tab</b> — roam / tune mode<br>
+      <b>Arrows</b> — move (Shift = big steps) &nbsp;·&nbsp; <b>Space</b> — mark a candidate,
+      then confirm it frame by frame (press space once per frame)<br>
+      <b>Tab</b> — roam / tune mode &nbsp;·&nbsp;
       <b>[</b> / <b>]</b> — speed down / up (Shift = fine) &nbsp;·&nbsp; <b>;</b> / <b>'</b> — rotate direction (Shift = fine)<br>
-      <b>V</b> — speak current speed &amp; direction &nbsp;·&nbsp; <b>P</b> — speak position &nbsp;·&nbsp; <b>Enter</b> — commit guess<br>
+      <b>V</b> — speak current speed &amp; direction &nbsp;·&nbsp; <b>P</b> — speak position &nbsp;·&nbsp;
+      <b>Enter</b> — finish hunting and see your results<br>
       <b>Roam mode</b>: the app tries every velocity at your cursor and plays the best honest track it finds.
       <b>Tune mode</b>: you control speed and direction yourself — the pulse quickens as the stack snaps into focus.
     </div>
