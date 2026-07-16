@@ -474,7 +474,11 @@ function bank(x, y) {
   /* mouse + keyboard */
   sky.style.pointerEvents = 'auto';
   sky.addEventListener('pointermove', e => {
-    if (!started || mode !== 'roam') return;
+    // during confirming, the cursor is seeded at the PREDICTED position and
+    // must only move by deliberate arrow keys - a stray trackpad twitch would
+    // silently destroy the seeding (arrows announce themselves; a mouse jiggle
+    // does not, which is fatal for a blind user).
+    if (!started || mode !== 'roam' || session === 'confirming') return;
     const r = sky.getBoundingClientRect();
     cx = (e.clientX - r.left) / r.width * W;
     cy = (e.clientY - r.top) / r.height * H;
@@ -501,18 +505,48 @@ function bank(x, y) {
         if (session === 'hunting') finishHunting();
         else say('Finish confirming this candidate first - press space to continue.', true);
         break;
+      case 'Tab':
+        if (session === 'confirming') {
+          // swallow Tab so the browser cannot move focus off the hunt stage
+          // mid-confirmation (which would silently kill all keyboard input)
+          say('Finish confirming this candidate first - press space to continue.', true);
+          break;
+        }
+        handled = false;   // hunting mode: fall through to the mode-toggle below
+        break;
+      case 'Tab':
+        if (session === 'confirming') {
+          // swallow Tab: otherwise the browser moves focus off the hunt stage
+          // mid-confirmation and every subsequent keypress silently goes nowhere
+          say('Finish confirming this candidate first - press space to continue.', true);
+          break;
+        }
+        mode = mode === 'roam' ? 'tune' : 'roam';
+        if (mode === 'tune' && evalOut.speed > 0) {
+          tuneSpeed = evalOut.speed; tuneAngle = evalOut.angle;   // seed from pixels
+        }
+        say(mode === 'roam' ? 'Roam mode' : 'Tune mode. Speed ' +
+            tuneSpeed.toFixed(0) + ' arcseconds per day, heading ' +
+            tuneAngle.toFixed(0) + ' degrees.', true);
+        break;
+      case 'Tab':
+        if (session === 'confirming') {
+          // swallow Tab: otherwise the browser moves focus off the hunt stage
+          // mid-confirmation and every subsequent keypress silently goes nowhere
+          say('Finish confirming this candidate first - press space to continue.', true);
+          break;
+        }
+        mode = mode === 'roam' ? 'tune' : 'roam';
+        if (mode === 'tune' && evalOut.speed > 0) {
+          tuneSpeed = evalOut.speed; tuneAngle = evalOut.angle;   // seed from pixels
+        }
+        say(mode === 'roam' ? 'Roam mode' : 'Tune mode. Speed ' +
+            tuneSpeed.toFixed(0) + ' arcseconds per day, heading ' +
+            tuneAngle.toFixed(0) + ' degrees.', true);
+        break;
       default:
         if (session === 'hunting') {
           switch (e.key) {
-            case 'Tab':
-              mode = mode === 'roam' ? 'tune' : 'roam';
-              if (mode === 'tune' && evalOut.speed > 0) {
-                tuneSpeed = evalOut.speed; tuneAngle = evalOut.angle;   // seed from pixels
-              }
-              say(mode === 'roam' ? 'Roam mode' : 'Tune mode. Speed ' +
-                  tuneSpeed.toFixed(0) + ' arcseconds per day, heading ' +
-                  tuneAngle.toFixed(0) + ' degrees.', true);
-              break;
             case '[': tuneSpeed = Math.max(SPEED_MIN, tuneSpeed - (big ? 5 : 25)); break;
             case ']': tuneSpeed = Math.min(SPEED_MAX, tuneSpeed + (big ? 5 : 25)); break;
             case ';': tuneAngle = (tuneAngle - (big ? 0.5 : 2) + 360) % 360; break;
@@ -548,6 +582,7 @@ function bank(x, y) {
     const s0 = frameSignalAt(0, cx, cy);
     pending.perFrame[0] = { x: cx, y: cy, val: s0 };
     confirmFrame = 1;
+    sky.onerror = () => { sky.onerror = null; };   // missing clean image: keep going, sound still works
     sky.src = base + '_huntclean_f2.png';       // clean - never has candidate circles
     // seed the cursor at the PREDICTED position for frame 2, so the user has
     // a real starting point instead of guessing blind; they can still nudge
@@ -580,6 +615,7 @@ function bank(x, y) {
       sky.src = base + '_backdrop.jpg';
       sky.onerror = () => { sky.onerror = null; sky.src = base + '_huntclean_f1.png'; };
     } else {
+      sky.onerror = () => { sky.onerror = null; };
       sky.src = base + '_huntclean_f' + (confirmFrame + 1) + '.png';
       const [px, py] = predictedPos(confirmFrame);
       cx = Math.max(0, Math.min(W - 1, px));
@@ -607,7 +643,13 @@ function bank(x, y) {
     form.submit();
   }
 
-  commitBtn.onclick = finishHunting;
+  commitBtn.onclick = () => {
+    if (session === 'confirming') {
+      say('Finish confirming this candidate first - press space to continue.', true);
+      return;
+    }
+    finishHunting();
+  };
   commitBtn.textContent = 'Finish hunting (Enter)';
 
   /* audio: tone = how strongly a real track sings; pulse rate = how sharply
