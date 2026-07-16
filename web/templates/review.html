@@ -71,21 +71,30 @@
 
       <h2 class="visually-hidden">Blink viewer</h2>
       <div class="blink-controls" role="group" aria-label="Blink through the frames">
+        {% if candidates|length > 1 %}
+        <label for="blinkCand">Candidate:</label>
+        <select id="blinkCand">
+          {% for c in candidates %}<option value="{{ loop.index0 }}">Candidate {{ loop.index }}</option>{% endfor %}
+        </select>
+        {% endif %}
         <button id="blinkPrev">← previous frame</button>
         <span id="blinkLabel">Frame 1 of 4</span>
         <button id="blinkNext">next frame →</button>
       </div>
-      <div style="text-align:center">
+      <div style="text-align:center; position: relative; display: inline-block; width: 100%;">
         <img id="blinkImg" class="blink-frame"
-             src="{{ url_for('static', filename='results/' + sid + '_frame1.png') }}"
+             src="{{ url_for('static', filename='results/' + sid + '_huntclean_f1.png') }}"
              alt="Telescope frame 1">
+        <canvas id="blinkOv" style="position:absolute; inset:0; pointer-events:none;"></canvas>
       </div>
+      <p class="tagline" style="font-size:.85em">Green circle marks where you pressed space in that frame.</p>
     {% endif %}
   </main>
 
 <script>
 (function () {
   var candidates = {{ candidates|tojson }};
+  var sid = {{ sid|tojson }};
   var live = document.getElementById('reviewLive');
   var synth = window.speechSynthesis;
 
@@ -129,20 +138,53 @@
     say(parts.join(' '));
   }
 
-  // sighted companion: simple blink viewer over the same session's frames
+  // Blink viewer: shows the CLEAN per-frame images (same ones used while
+  // hunting) with a green circle drawn where the user actually pressed
+  // space in that frame - this is their own trail, not the pipeline's.
   var blinkImg = document.getElementById('blinkImg');
   var blinkLabel = document.getElementById('blinkLabel');
-  var sid = {{ sid|tojson }};
-  var frame = 1, NF = 4;
+  var blinkOv = document.getElementById('blinkOv');
+  var blinkCandSel = document.getElementById('blinkCand');
+  var octx = blinkOv ? blinkOv.getContext('2d') : null;
+  var frame = 0, candIdx = 0;
+  var BIN_W = {{ bin_w|tojson }}, BIN_H = {{ bin_h|tojson }};   // binned pixel space of clicks
   function updateBlink() {
-    if (!blinkImg) return;
-    blinkImg.src = '/static/results/' + sid + '_frame' + frame + '.png';
-    blinkImg.alt = 'Telescope frame ' + frame;
-    blinkLabel.textContent = 'Frame ' + frame + ' of ' + NF;
+    if (!blinkImg || !candidates.length) return;
+    var c = candidates[candIdx];
+    blinkImg.src = '/static/results/' + sid + '_huntclean_f' + (frame + 1) + '.png';
+    blinkImg.alt = 'Telescope frame ' + (frame + 1);
+    blinkLabel.textContent = 'Frame ' + (frame + 1) + ' of ' + c.n_frames;
+    blinkImg.onload = function () { drawCircle(c); };
   }
+
+  function drawCircle(c) {
+    if (!octx) return;
+    var Wc = blinkOv.width = blinkImg.clientWidth;
+    var Hc = blinkOv.height = blinkImg.clientHeight;
+    octx.clearRect(0, 0, Wc, Hc);
+    var click = c.clicks && c.clicks[frame];
+    if (!click) return;
+    // click.x/y are in BINNED pixel space (BIN_W x BIN_H) - convert to the
+    // displayed image's on-screen size, same ratio approach hunt.js uses.
+    var px = (click.x / BIN_W) * Wc;
+    var py = (click.y / BIN_H) * Hc;
+    octx.strokeStyle = '#5ee0a0'; octx.lineWidth = 2;
+    octx.beginPath(); octx.arc(px, py, 10, 0, 2 * Math.PI); octx.stroke();
+  }
+
   var prevBtn = document.getElementById('blinkPrev'), nextBtn = document.getElementById('blinkNext');
-  if (prevBtn) prevBtn.onclick = function () { frame = frame > 1 ? frame - 1 : NF; updateBlink(); };
-  if (nextBtn) nextBtn.onclick = function () { frame = frame < NF ? frame + 1 : 1; updateBlink(); };
+  if (prevBtn) prevBtn.onclick = function () {
+    var n = candidates[candIdx].n_frames;
+    frame = frame > 0 ? frame - 1 : n - 1; updateBlink();
+  };
+  if (nextBtn) nextBtn.onclick = function () {
+    var n = candidates[candIdx].n_frames;
+    frame = frame < n - 1 ? frame + 1 : 0; updateBlink();
+  };
+  if (blinkCandSel) blinkCandSel.onchange = function () {
+    candIdx = parseInt(blinkCandSel.value, 10); frame = 0; updateBlink();
+  };
+  if (candidates.length) updateBlink();
 })();
 </script>
 </body>

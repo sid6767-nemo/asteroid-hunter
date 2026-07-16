@@ -399,6 +399,15 @@ function bank(x, y) {
     return Math.max(0, sum / (noise * N_CORE));
   }
 
+  /* where SHOULD the object be in frame k, given the velocity it was found
+   * with at frame 0? This is the same math roam/tune already use internally
+   * (position + velocity * elapsed time) - now surfaced as a visual anchor
+   * so confirming isn't blind mental arithmetic. */
+  function predictedPos(k) {
+    const v = velFrom(pending.speed, pending.angle);
+    return [pending.x + v[0] * T[k], pending.y + v[1] * T[k]];
+  }
+
   function evaluate() {
     if (session === 'confirming') {
       const s = frameSignalAt(confirmFrame, cx, cy);
@@ -537,11 +546,18 @@ function bank(x, y) {
     // (this one plus NF-1 more) confirm all NF frames, matching what a
     // sighted user does clicking through the blink viewer.
     const s0 = frameSignalAt(0, cx, cy);
-    pending.perFrame[0] = s0;
+    pending.perFrame[0] = { x: cx, y: cy, val: s0 };
     confirmFrame = 1;
-    sky.src = base + '_frame2.png';
-    let msg = 'Candidate marked, frame 1 of ' + NF + ' recorded. Now showing frame 2 of ' + NF +
-              '. Search near this spot for the same object, then press space.';
+    sky.src = base + '_huntclean_f2.png';       // clean - never has candidate circles
+    // seed the cursor at the PREDICTED position for frame 2, so the user has
+    // a real starting point instead of guessing blind; they can still nudge
+    // from there with arrows/mouse before pressing space.
+    const [px, py] = predictedPos(1);
+    cx = Math.max(0, Math.min(W - 1, px));
+    cy = Math.max(0, Math.min(H - 1, py));
+    let msg = 'Candidate marked, frame 1 of ' + NF + ' recorded. Now on frame 2 of ' + NF +
+              ', cursor placed where the object should be based on its motion - ' +
+              'nudge with arrows if needed, then press space to confirm.';
     if (s0 < pending.huntScore * 0.3) {
       msg += ' This one is faint - a single frame may not show it clearly. ' +
              'That is expected; trust the combined sound you heard while hunting.';
@@ -553,7 +569,7 @@ function bank(x, y) {
    * CURRENTLY on screen, then either show the next frame or finalize once
    * all NF frames have been confirmed. */
   function confirmFrameStep() {
-    pending.perFrame[confirmFrame] = frameSignalAt(confirmFrame, cx, cy);
+    pending.perFrame[confirmFrame] = { x: cx, y: cy, val: frameSignalAt(confirmFrame, cx, cy) };
     confirmFrame++;
     if (confirmFrame >= NF) {
       confirmed.push(pending);
@@ -562,11 +578,14 @@ function bank(x, y) {
       pending = null;
       session = 'hunting';
       sky.src = base + '_backdrop.jpg';
-      sky.onerror = () => { sky.onerror = null; sky.src = base + '_frame1.png'; };
+      sky.onerror = () => { sky.onerror = null; sky.src = base + '_huntclean_f1.png'; };
     } else {
-      sky.src = base + '_frame' + (confirmFrame + 1) + '.png';
+      sky.src = base + '_huntclean_f' + (confirmFrame + 1) + '.png';
+      const [px, py] = predictedPos(confirmFrame);
+      cx = Math.max(0, Math.min(W - 1, px));
+      cy = Math.max(0, Math.min(H - 1, py));
       say('Frame ' + (confirmFrame + 1) + ' of ' + NF +
-          '. Search near this spot for the same object, then press space.', true);
+          ', cursor placed where the object should be. Nudge if needed, then press space.', true);
     }
   }
 

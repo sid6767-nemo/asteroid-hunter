@@ -386,8 +386,10 @@ def main():
     if SAVE_FRAMES:
         try:
             import json as _hj
+            from PIL import Image as _HImage
             HBIN = 2                      # 2x2 binning: halves noise, keeps the PSF sampled
             HOFF = 1000.0                 # offset preserves negative noise around zero
+            NW_h = 700                    # display width for the clean hunt-mode frame images
             h_gain, h_sig, hb, wb = [], [], 0, 0
             for fi, img in enumerate(aligned):
                 Hb = img.shape[0] // HBIN * HBIN; Wb = img.shape[1] // HBIN * HBIN
@@ -399,6 +401,20 @@ def main():
                 d16[nod] = 0                          # 0 = no-data sentinel
                 d16.tofile(os.path.join(OUTPUT_DIR, f'{dataset_name}_hunt_f{fi}.bin'))
                 h_gain.append(float(gain)); h_sig.append(float(sb)); hb, wb = d16.shape
+
+                # clean, UNMARKED per-frame display image for hunt-by-ear
+                # confirmation. This must NEVER have candidate circles on it,
+                # unlike frame{k}.png below (built for the results-page blink
+                # viewer, where showing the answer is the point). Generated
+                # unconditionally - hunt-by-ear works even when the pipeline
+                # itself finds nothing, same reasoning as backdrop.jpg's fix.
+                disp = np.arcsinh(np.clip((img - mb) / (sb * 4 if sb > 0 else 1), 0, None))
+                p996 = np.percentile(disp, 99.6)
+                disp = np.clip(disp / (p996 if p996 > 0 else 1), 0, 1)
+                NH_h = int(img.shape[0] * NW_h / img.shape[1])
+                _HImage.fromarray((disp * 255).astype(np.uint8)).resize((NW_h, NH_h)).save(
+                    os.path.join(OUTPUT_DIR, f'{dataset_name}_huntclean_f{fi+1}.png'), quality=80)
+
             with open(os.path.join(OUTPUT_DIR, f'{dataset_name}_hunt.json'), 'w') as hf:
                 _hj.dump({'width': wb, 'height': hb, 'bin': HBIN,
                           'pixel_scale': PIXEL_SCALE, 'nframes': N,
@@ -406,7 +422,7 @@ def main():
                           'gain': [round(g, 6) for g in h_gain],
                           'sigma': [round(s, 3) for s in h_sig],
                           'offset': HOFF, 'align_ok': align_ok}, hf)
-            print(f"Saved hunt data -> {dataset_name}_hunt.json + {N} .bin frames")
+            print(f"Saved hunt data -> {dataset_name}_hunt.json + {N} .bin frames + {N} clean display frames")
         except Exception as _e:
             print(f"  (hunt export skipped: {_e})")
 

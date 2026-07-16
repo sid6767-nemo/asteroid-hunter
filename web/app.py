@@ -184,12 +184,12 @@ def hunt_review(sid):
     hunting."""
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', sid):
         return render_template('review.html', sid=None, candidates=[],
-                               error='Invalid session id.'), 404
+                               error='Invalid session id.', bin_w=0, bin_h=0), 404
 
     hunt_meta_path = os.path.join(RESULTS_DIR, f'{sid}_hunt.json')
     if not os.path.exists(hunt_meta_path):
         return render_template('review.html', sid=None, candidates=[],
-                               error='No hunt data for this session.'), 404
+                               error='No hunt data for this session.', bin_w=0, bin_h=0), 404
     with open(hunt_meta_path) as f:
         meta = json.load(f)
     W, H = meta['width'], meta['height']
@@ -226,8 +226,13 @@ def hunt_review(sid):
 
         # honesty check: did per-frame confirmation actually hold up, or was
         # it (correctly) too faint to confirm alone in every single frame?
-        valid_frames = [v for v in per_frame if v is not None]
+        # perFrame entries are now {x, y, val} - the user's actual click
+        # position and signal in that frame, not just a bare number.
+        frame_vals = [(f.get('val') if isinstance(f, dict) else f) for f in per_frame]
+        valid_frames = [v for v in frame_vals if v is not None]
         weak_frames = sum(1 for v in valid_frames if v < score * 0.3)
+        click_points = [{'x': round(f.get('x', 0)), 'y': round(f.get('y', 0))}
+                        if isinstance(f, dict) else None for f in per_frame]
 
         enriched.append({
             'x': round(x), 'y': round(y),
@@ -237,12 +242,14 @@ def hunt_review(sid):
             'matched': matched,
             'name': (best.get('name') if matched else None),
             'catalog_speed': (best.get('rate') if best else None),
-            'per_frame': [round(v, 2) if v is not None else None for v in per_frame],
+            'per_frame': [round(v, 2) if v is not None else None for v in frame_vals],
+            'clicks': click_points,          # where the user actually marked each frame
             'weak_frame_count': weak_frames,
             'n_frames': len(per_frame),
         })
 
-    return render_template('review.html', sid=sid, candidates=enriched, error=None)
+    return render_template('review.html', sid=sid, candidates=enriched, error=None,
+                           bin_w=W, bin_h=H)
 
 
 _SPEC_CACHE = {}
