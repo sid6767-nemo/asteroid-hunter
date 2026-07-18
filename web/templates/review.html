@@ -84,11 +84,13 @@
         <span id="blinkLabel">Frame 1 of 4</span>
         <button id="blinkNext">next frame →</button>
       </div>
-      <div style="text-align:center; position: relative; display: inline-block; width: 100%;">
-        <img id="blinkImg" class="blink-frame"
-             src="{{ url_for('static', filename='results/' + sid + '_huntclean_f1.png') }}"
-             alt="Telescope frame 1">
-        <canvas id="blinkOv" style="position:absolute; inset:0; pointer-events:none;"></canvas>
+      <div style="text-align:center;">
+        <div style="position: relative; display: inline-block;">
+          <img id="blinkImg" class="blink-frame"
+               src="{{ url_for('static', filename='results/' + sid + '_huntclean_f1.png') }}"
+               alt="Telescope frame 1">
+          <canvas id="blinkOv" style="position:absolute; inset:0; pointer-events:none;"></canvas>
+        </div>
       </div>
       <p class="tagline" style="font-size:.85em">Each candidate's marks are drawn in its own
         color on every frame; the highlighted one is brightest. Press Blink to alternate
@@ -215,6 +217,9 @@
   if (blinkCandSel) blinkCandSel.onchange = function () {
     candIdx = parseInt(blinkCandSel.value, 10); updateBlink();
   };
+  window.addEventListener('resize', function () {
+    if (candidates.length) drawAll();          // keep circles glued to the image on resize
+  });
   if (candidates.length) updateBlink();
 })();
 </script>
