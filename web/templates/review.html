@@ -49,11 +49,13 @@
              · hunt score {{ c.score }}</p>
           {% if c.matched %}
             <p>Confirmed: this matches {{ c.name or 'a cataloged object' }} in the pipeline's
-               results, moving {{ c.catalog_speed }}"/day. Your track agrees with the catalog.</p>
+               results, moving {{ c.catalog_speed }}"/day. Your track agrees with the catalog.
+               {% if c.name %}<a href="{{ url_for('orbit', name=c.name) }}" target="_blank">View its orbit &rarr;</a>{% endif %}</p>
           {% elif c.band == 'candidate' %}
             <p>Not in the catalog. Score is above the reliable-detection threshold — a real
                recovery candidate. Blink the frames below to verify by eye, or share this
-               position for follow-up.</p>
+               position for follow-up. No orbit can be computed from one night's data —
+               a real orbit needs observations across multiple nights.</p>
           {% elif c.band == 'maybe' %}
             <p>Not in the catalog. Score is above the noise floor but below the reliable
                threshold — could be a very faint real object, could be an artifact.</p>
@@ -72,11 +74,12 @@
       <h2 class="visually-hidden">Blink viewer</h2>
       <div class="blink-controls" role="group" aria-label="Blink through the frames">
         {% if candidates|length > 1 %}
-        <label for="blinkCand">Candidate:</label>
+        <label for="blinkCand">Highlight:</label>
         <select id="blinkCand">
           {% for c in candidates %}<option value="{{ loop.index0 }}">Candidate {{ loop.index }}</option>{% endfor %}
         </select>
         {% endif %}
+        <button id="blinkPlay" aria-pressed="false">▶ Blink</button>
         <button id="blinkPrev">← previous frame</button>
         <span id="blinkLabel">Frame 1 of 4</span>
         <button id="blinkNext">next frame →</button>
@@ -87,7 +90,10 @@
              alt="Telescope frame 1">
         <canvas id="blinkOv" style="position:absolute; inset:0; pointer-events:none;"></canvas>
       </div>
-      <p class="tagline" style="font-size:.85em">Green circle marks where you pressed space in that frame.</p>
+      <p class="tagline" style="font-size:.85em">Each candidate's marks are drawn in its own
+        color on every frame; the highlighted one is brightest. Press Blink to alternate
+        frames automatically — a real moving object's circle will follow a dot that jumps
+        while the stars hold still.</p>
     {% endif %}
   </main>
 
@@ -139,50 +145,75 @@
   }
 
   // Blink viewer: shows the CLEAN per-frame images (same ones used while
-  // hunting) with a green circle drawn where the user actually pressed
-  // space in that frame - this is their own trail, not the pipeline's.
+  // hunting) with each candidate's own marks drawn on every frame.
   var blinkImg = document.getElementById('blinkImg');
   var blinkLabel = document.getElementById('blinkLabel');
   var blinkOv = document.getElementById('blinkOv');
   var blinkCandSel = document.getElementById('blinkCand');
   var octx = blinkOv ? blinkOv.getContext('2d') : null;
-  var frame = 0, candIdx = 0;
+  var frame = 0, candIdx = 0, playTimer = null;
   var BIN_W = {{ bin_w|tojson }}, BIN_H = {{ bin_h|tojson }};   // binned pixel space of clicks
-  function updateBlink() {
-    if (!blinkImg || !candidates.length) return;
-    var c = candidates[candIdx];
-    blinkImg.src = '/static/results/' + sid + '_huntclean_f' + (frame + 1) + '.png';
-    blinkImg.alt = 'Telescope frame ' + (frame + 1);
-    blinkLabel.textContent = 'Frame ' + (frame + 1) + ' of ' + c.n_frames;
-    blinkImg.onload = function () { drawCircle(c); };
+  // one distinct color per candidate, so several found objects can all be
+  // followed at once; the highlighted candidate is drawn brightest/thickest
+  var CAND_COLORS = ['#5ee0a0', '#6ab7ff', '#ffb84d', '#ff7ad9', '#c0ff5e', '#ff6d6d'];
+
+  function nFrames() {
+    return candidates.length ? candidates[0].n_frames : {{ candidates[0].n_frames if candidates else 4 }};
   }
 
-  function drawCircle(c) {
+  function updateBlink() {
+    if (!blinkImg || !candidates.length) return;
+    blinkImg.src = '/static/results/' + sid + '_huntclean_f' + (frame + 1) + '.png';
+    blinkImg.alt = 'Telescope frame ' + (frame + 1);
+    blinkLabel.textContent = 'Frame ' + (frame + 1) + ' of ' + nFrames();
+    blinkImg.onload = drawAll;
+  }
+
+  function drawAll() {
     if (!octx) return;
     var Wc = blinkOv.width = blinkImg.clientWidth;
     var Hc = blinkOv.height = blinkImg.clientHeight;
     octx.clearRect(0, 0, Wc, Hc);
-    var click = c.clicks && c.clicks[frame];
-    if (!click) return;
-    // click.x/y are in BINNED pixel space (BIN_W x BIN_H) - convert to the
-    // displayed image's on-screen size, same ratio approach hunt.js uses.
-    var px = (click.x / BIN_W) * Wc;
-    var py = (click.y / BIN_H) * Hc;
-    octx.strokeStyle = '#5ee0a0'; octx.lineWidth = 2;
-    octx.beginPath(); octx.arc(px, py, 10, 0, 2 * Math.PI); octx.stroke();
+    // EVERY candidate's mark for this frame, each in its own color -
+    // not just the selected one (that was a bug: with 2+ finds only one showed)
+    candidates.forEach(function (c, i) {
+      var click = c.clicks && c.clicks[frame];
+      if (!click) return;
+      var px = (click.x / BIN_W) * Wc;
+      var py = (click.y / BIN_H) * Hc;
+      var sel = (i === candIdx);
+      octx.strokeStyle = CAND_COLORS[i % CAND_COLORS.length];
+      octx.globalAlpha = sel ? 1.0 : 0.55;
+      octx.lineWidth = sel ? 2.5 : 1.5;
+      octx.beginPath(); octx.arc(px, py, sel ? 11 : 9, 0, 2 * Math.PI); octx.stroke();
+      octx.globalAlpha = 1.0;
+    });
   }
 
   var prevBtn = document.getElementById('blinkPrev'), nextBtn = document.getElementById('blinkNext');
+  var playBtn = document.getElementById('blinkPlay');
+  function stopPlay() {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    if (playBtn) { playBtn.textContent = '▶ Blink'; playBtn.setAttribute('aria-pressed', 'false'); }
+  }
+  if (playBtn) playBtn.onclick = function () {
+    if (playTimer) { stopPlay(); return; }
+    // real blinking: auto-alternate frames, the classic blink-comparator way -
+    // a genuine mover jumps frame to frame while the star field holds still
+    playTimer = setInterval(function () {
+      frame = (frame + 1) % nFrames(); updateBlink();
+    }, 450);
+    playBtn.textContent = '⏸ Stop';
+    playBtn.setAttribute('aria-pressed', 'true');
+  };
   if (prevBtn) prevBtn.onclick = function () {
-    var n = candidates[candIdx].n_frames;
-    frame = frame > 0 ? frame - 1 : n - 1; updateBlink();
+    stopPlay(); frame = frame > 0 ? frame - 1 : nFrames() - 1; updateBlink();
   };
   if (nextBtn) nextBtn.onclick = function () {
-    var n = candidates[candIdx].n_frames;
-    frame = frame < n - 1 ? frame + 1 : 0; updateBlink();
+    stopPlay(); frame = frame < nFrames() - 1 ? frame + 1 : 0; updateBlink();
   };
   if (blinkCandSel) blinkCandSel.onchange = function () {
-    candIdx = parseInt(blinkCandSel.value, 10); frame = 0; updateBlink();
+    candIdx = parseInt(blinkCandSel.value, 10); updateBlink();
   };
   if (candidates.length) updateBlink();
 })();
