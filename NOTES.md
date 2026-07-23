@@ -129,3 +129,31 @@ which is reliable.
 It is embedded below the blink viewer in the web app.
 Two things to fix next: the readings are uneven from different sides,
 and I want it to speak the asteroid's name and coordinates out loud.
+
+## Days 27–29 — SkyBoT matching fixed (twice), standalone demos, README rewrite
+The SkyBoT name matching had been silently reading the wrong columns, so matches were coming out wrong or missing. Fixed it to actually read the RA/Dec columns properly. Also centered the sonar beacon on the frame-1 position so the sound field lines up with the backdrop image instead of drifting off it.
+
+Split off standalone versions of the detect-by-ear tool and orbit viewer that don't need the full pipeline running, so I can demo either one on its own. Cleaned up the repo so generated outputs and textures aren't tracked in git anymore.
+
+The SkyBoT fix from Day 27 wasn't fully right either — had to go back in and fix the name matching a second time. Also added per-frame positions for hotspots so I can see where a candidate actually sat in every frame, not just the summary track.
+
+Rewrote the README properly: web app, orbit viewer, hazard assessment, sonification, and an honest limitations section instead of just pipeline notes. It was still describing the project as a command-line pipeline when it's a web app now.
+
+## Days 30–32 — hunt-by-ear score engine, QK157 recovery
+Built the actual shift-and-stack score engine behind hunt-by-ear and ported it to JS so it runs live in the browser, wired into new `/hunt` routes. Before this the sonification was just a demo; now it's scoring a real stacked signal as you move.
+
+Ran an experiment asking whether the ear score could recover known asteroids too faint for the pipeline to see in a single frame. Pulled every known asteroid in the set203 field from SkyBoT, turned each one's sky position into a pixel track, and scored it two ways: once knowing its real velocity, once blind (guessing, like a user would). Compared against empty sky and against the 3 pipeline-confirmed asteroids as a reference.
+
+2002 QK157 (V=22.5, well below what the pipeline can see in one frame) came back with a high score and a velocity match to the catalog within 3° direction and 2% speed — a real recovery, not a lucky noise spike.
+
+## Days 33–34 — 4/7 in the README, hunt-by-ear hardened
+Updated the README results to 4/7 known asteroids recovered (3 pipeline + QK157 via shift-and-stack), and put hunt-by-ear on the front page instead of burying it as a side feature. Added real web app screenshots with captions so the README shows what it actually looks like instead of just describing it.
+
+Turned the QK157 score of 0.45 into an actual threshold: below 0.35 is noise floor (refused), 0.35–0.45 is flagged low-confidence, above 0.45 is a candidate. Added bright-star rejection zones and cursor-anchored zoom so the tool isn't blindsided by saturated stars, and made hunt sessions per-browser instead of shared. 
+
+Rebuilt the upload flow so importing frames goes straight into sonification instead of stopping at the results page first. Also added per-frame candidate confirmation — hit space to mark a candidate in each frame — feeding into a new review page that checks marks against the catalog and reads back a spoken summary.
+
+## Days 35–36 — click-safe confirming mode, auto-blink review
+The per-frame confirmation flow from Day 34 broke easily — a stray mouse move could wipe out a seeded cursor position, Tab could jump focus out of the flow, and the finish button had no guard against double-submits. Fixed all three, added predicted-position cursor seeding so the cursor starts near where the object should be in each frame, and the review blink viewer now shows my per-frame clicks as green circles so I can see what I actually marked.
+
+Built an auto-blink comparator into the review page so frames cycle on their own instead of me stepping through by hand, with every candidate drawn in its own color. Matched candidates get a direct link to their orbit viewer; unmatched single-night candidates get an honest note that there's no orbit to show, instead of silently omitting anything. Fixed a display bug where the review canvas stretched across the full-width wrapper instead of hugging the actual image — circles were landing in the wrong spot relative to what was on screen.
